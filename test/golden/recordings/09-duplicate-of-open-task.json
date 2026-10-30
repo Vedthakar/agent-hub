@@ -1,0 +1,8 @@
+{
+  "id": "09-duplicate-of-open-task",
+  "source": "authored",
+  "model": null,
+  "recordedAt": "2026-10-30T00:00:00.000Z",
+  "promptSha256": "6dff9dbd21d7fb75a84ba7b97a8d1bfd783b232f703e75d0f52ef0ad2ad8c2e0",
+  "reply": "{\n \"summary\": \"Ved reiterated the one-week open-source pause.\",\n \"topics\": [\n  \"open_source\"\n ],\n \"situation\": [],\n \"supersede_situation_ids\": [],\n \"facts\": [],\n \"retire_fact_ids\": [],\n \"tasks\": [\n  {\n   \"target_agent\": \"grok\",\n   \"payload\": \"PAUSE all open source work for 1 week!!\",\n   \"rationale\": \"\",\n   \"topics\": [\n    \"open_source\"\n   ],\n   \"author\": \"user\"\n  }\n ]\n}"
+}

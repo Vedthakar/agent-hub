@@ -1,0 +1,8 @@
+{
+  "id": "05-boardy-investor-intro",
+  "source": "authored",
+  "model": null,
+  "recordedAt": "2026-10-30T00:00:00.000Z",
+  "promptSha256": "f4633d8dd79cbfeefae855be0a8b35fe677e92c82717b979c7c9f7004f578d13",
+  "reply": "{\n \"summary\": \"Boardy offered an intro to Priya (angel investor, Northwind) and Ved accepted a call Tuesday afternoon.\",\n \"topics\": [\n  \"networking\",\n  \"professional\"\n ],\n \"situation\": [\n  {\n   \"text\": \"Investor intro with Priya (Northwind) being set up for Tuesday afternoon\",\n   \"slot\": \"intro:priya\",\n   \"topics\": [\n    \"networking\",\n    \"professional\"\n   ],\n   \"valid_from\": null,\n   \"expires_at\": \"2026-11-04T00:00:00-05:00\",\n   \"author\": \"user\"\n  }\n ],\n \"supersede_situation_ids\": [],\n \"facts\": [],\n \"retire_fact_ids\": [],\n \"tasks\": [\n  {\n   \"target_agent\": \"instinct\",\n   \"payload\": \"Hold Tuesday afternoon (Nov 3) for an intro call with Priya from Northwind, set up by Boardy.\",\n   \"rationale\": \"Ved accepted the intro.\",\n   \"topics\": [\n    \"schedule\",\n    \"networking\"\n   ],\n   \"author\": \"user\"\n  }\n ]\n}"
+}

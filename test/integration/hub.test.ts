@@ -2,8 +2,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { situationFor } from '../src/hub/context.js';
-import { HANDLES, INSTINCT_EMAIL, makeHub, minutesFromNow, msg, serve } from './helpers.js';
+import { situationFor } from '../../src/hub/context.js';
+import { HANDLES, INSTINCT_EMAIL, makeHub, minutesFromNow, msg, serve } from '../helpers.js';
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {

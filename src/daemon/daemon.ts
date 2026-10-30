@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { DaemonConfig, DaemonMessage, OutboxItem } from '../shared/types.js';
 import type { Logger } from '../shared/log.js';
@@ -61,20 +61,47 @@ export interface StateStore {
   save(state: DaemonState): Promise<void>;
 }
 
+function parseState(raw: string): DaemonState {
+  const s = JSON.parse(raw) as DaemonState;
+  if (!s || typeof s !== 'object' || !Number.isSafeInteger(s.lastRowId) || s.lastRowId < 0) throw new Error('bad checkpoint');
+  return s;
+}
+
+/**
+ * Atomic writes, plus the previous checkpoint kept in `<file>.bak`. A missing file means first run;
+ * an unreadable one is an error rather than a first run, since a first run starts at the newest message
+ * and would silently drop everything since the last good checkpoint.
+ */
 export function fileStateStore(file: string): StateStore {
+  const backup = `${file}.bak`;
+  const read = async (f: string): Promise<DaemonState | 'missing' | 'corrupt'> => {
+    let raw: string;
+    try {
+      raw = await readFile(f, 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 'missing';
+      throw err;
+    }
+    try {
+      return parseState(raw);
+    } catch {
+      return 'corrupt';
+    }
+  };
   return {
     async load() {
-      try {
-        return JSON.parse(await readFile(file, 'utf8')) as DaemonState;
-      } catch {
-        return null;
-      }
+      const main = await read(file);
+      if (typeof main === 'object') return main;
+      const prev = await read(backup);
+      if (typeof prev === 'object') return prev;
+      if (main === 'missing' && prev === 'missing') return null;
+      throw new Error(`daemon checkpoint ${file} is unreadable; fix or delete it (deleting restarts from the newest message)`);
     },
-    /** Atomic write so a crash or lid-close mid-write can't corrupt the checkpoint. */
     async save(state) {
       await mkdir(path.dirname(file), { recursive: true });
       const tmp = `${file}.${process.pid}.tmp`;
       await writeFile(tmp, JSON.stringify(state));
+      await copyFile(file, backup).catch(() => undefined);
       await rename(tmp, file);
     },
   };

@@ -174,7 +174,23 @@ None marked `TODO`/`FIXME`.
 ## Still happy-path or deferred (owned by later steps)
 
 - **Measured, not just designed:** 10k-message catch-up throughput, 50 concurrent `get_situation`, simultaneous approvals, and Messages.app restart mid-read. All step 5. Ingest is still one INSERT per message; batching is the expected step-5 fix.
-- **Live accounts:** Telegram FLOOD_WAIT and IMAP are only exercised with mocks or not at all. Grok spike not run against a live bot.
-- **Postgres/Supabase:** tests run on PGlite. Step 3 adds a run against local Supabase (or real Postgres) if Docker is available.
+- **Live accounts:** Telegram FLOOD_WAIT and IMAP are only exercised with mocks or not at all. Grok spike not run against a live bot. `npm run smoke` (step 3) checks SMTP, Telegram MTProto, the approval channel and the MCP OAuth flow with real credentials, sending only to Ved.
+- **Postgres/Supabase:** done in step 3. Integration, e2e and RLS tests run on local Supabase (`npm run supabase:start`); `npm run test:offline` keeps a PGlite fallback.
 - **CSRF:** relies on `SameSite=Strict` cookies; step 4 decides whether to add tokens.
 - **Debrief end:** still inferred from burst quiet time; there's no explicit "debrief done" signal.
+
+## Bugs found by the step-3 test suite: all fixed
+
+| Bug | Found by | Fix |
+|---|---|---|
+| JSON settings, audit details and OAuth client metadata were double-encoded on real Postgres, so `isPaused()` read the string `"true"` | Integration tests on Supabase | Explicit `$n::text::jsonb` casts (`store.ts`, `oauth.ts`) |
+| `undefined` query params crashed postgres.js (PGlite accepted them) | Integration tests on Supabase | `db.ts` maps `undefined` to `NULL` |
+| Reply-to-task hop attribution failed when the DB clock ran ahead of the Mac's (about 30 ms here), so a reply could start a fresh hop-0 chain | Integration tests on Supabase | `lastTaskSentTo` allows 120 s of clock skew |
+| `service_role` had table grants, so a leaked service key could read every table through PostgREST | RLS tests | Schema revokes all table and sequence grants from `service_role` (the hub talks to Postgres directly) |
+| A debrief with several commitments kept only the last one: items in the same `plan:<date>` slot superseded each other | Golden case 04 | Items from the same event no longer supersede each other |
+| Stanley: if the new side-channel Telegram thread was empty on the first poll, the first exchange (task plus Stan's reply) was skipped as "history" | Resilience test | An empty first poll sets the checkpoint to 0 |
+| A corrupt daemon checkpoint counted as a first run, which restarts at the newest message and silently drops the backlog | Daemon unit tests | Atomic save keeps `state.json.bak`; load falls back to it and otherwise errors (shown in health) |
+| Malformed model JSON put V8's parse error, which quotes about 20 characters of conversation, into the `router.failed` log line | chat.db pipeline log test | `extractJson` reports only the position |
+| `LOG_LEVEL` was read once at import, so module-level loggers ignored later changes | Log test | Level is read on each call |
+
+Deferred to step 4: a literal `</transcript>` inside a transcript can close the router's data block early (prompt-injection vector). The router can also claim `author: "user"` for content an agent wrote.

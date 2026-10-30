@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SCOPES, canSee } from '../src/hub/scopes.js';
-import { localDateKey, localIso, startOfLocalDay } from '../src/hub/tz.js';
-import { extractJson } from '../src/hub/llm.js';
-import { cleanTopics } from '../src/hub/router.js';
-import { normalizeHandle } from '../src/hub/hub.js';
+import { DEFAULT_SCOPES, canSee } from '../../src/hub/scopes.js';
+import { localDateKey, localIso, startOfLocalDay } from '../../src/hub/tz.js';
+import { extractJson } from '../../src/hub/llm.js';
+import { cleanTopics } from '../../src/hub/router.js';
+import { normalizeHandle } from '../../src/hub/hub.js';
 
 const scope = (agent: keyof typeof DEFAULT_SCOPES) => ({ agent, ...DEFAULT_SCOPES[agent] });
 

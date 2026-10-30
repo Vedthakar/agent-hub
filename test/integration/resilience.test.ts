@@ -1,16 +1,9 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { composeBoardyBrief } from '../src/hub/adapters/boardy.js';
-import { signWebhook } from '../src/hub/adapters/grok.js';
-import { handleBounces } from '../src/hub/bounces.js';
-import { twilioSignature } from '../src/hub/transports/sms.js';
-import { Daemon, HubHttpError, type DaemonState, type HubClient } from '../src/daemon/daemon.js';
-import { createLogger } from '../src/shared/log.js';
-import type { DaemonMessage } from '../src/shared/types.js';
-import { HANDLES, makeHub, msg, serve } from './helpers.js';
-import { buildChatDb } from './fixtures/chatdb.js';
+import { composeBoardyBrief } from '../../src/hub/adapters/boardy.js';
+import { signWebhook } from '../../src/hub/adapters/grok.js';
+import { handleBounces } from '../../src/hub/bounces.js';
+import { twilioSignature } from '../../src/hub/transports/sms.js';
+import { HANDLES, STANLEY_ENV, makeHub, msg, serve } from '../helpers.js';
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
@@ -186,6 +179,30 @@ describe('approvals: codes, expiry, lockout, channels', () => {
   });
 });
 
+describe('Stanley side channel (Telegram)', () => {
+  it('a brand-new, empty side thread still captures the first exchange', async () => {
+    const { hub, store, telegram } = await setup(STANLEY_ENV);
+    expect(await hub.pollReads()).toBe(0); // first poll: nothing in the thread yet
+    const task = await approvedTask(store, 'stanley', 'Write a script', ['content']);
+    await hub.dispatchApproved();
+    expect((await store.task(task.id))!.status).toBe('sent');
+    telegram.reply('Script attached'); // Stan answers before the next poll
+    expect(await hub.pollReads()).toBe(2);
+    const rows = await store.db.query<{ author: string; text: string }>("SELECT author, text FROM raw_messages WHERE agent = 'stanley' ORDER BY id");
+    expect(rows.map((r) => r.author)).toEqual(['hub', 'agent']);
+  });
+
+  it('on first contact with an existing thread, starts from now instead of importing history', async () => {
+    const { hub, store, telegram } = await setup(STANLEY_ENV);
+    telegram.reply('old message 1');
+    telegram.reply('old message 2');
+    expect(await hub.pollReads()).toBe(0);
+    telegram.reply('new');
+    expect(await hub.pollReads()).toBe(1);
+    expect((await store.db.query<{ text: string }>("SELECT text FROM raw_messages WHERE agent = 'stanley'")).map((r) => r.text)).toEqual(['new']);
+  });
+});
+
 describe('/health', () => {
   it('reports per-adapter state publicly and details with the daemon token', async () => {
     const { hub, store } = await setup();
@@ -199,95 +216,5 @@ describe('/health', () => {
     expect(full.adapters.find((a: { agent: string }) => a.agent === 'instinct').lastError).toBe('SMTP down');
     expect((await fetch(`${http.url}/health/stanley`)).status).toBe(200);
     expect((await fetch(`${http.url}/health/nobody`)).status).toBe(404);
-  });
-});
-
-describe('daemon', () => {
-  function harness(opts: { rows: { handle: string; text: string; fromMe?: boolean }[]; rejectText?: string; failIngest?: number }) {
-    const dir = mkdtempSync(path.join(tmpdir(), 'hubd-'));
-    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
-    const dbPath = path.join(dir, 'chat.db');
-    const fixture = buildChatDb(dbPath, opts.rows);
-    const shipped: DaemonMessage[] = [];
-    const acks: [number, boolean][] = [];
-    let failures = opts.failIngest ?? 0;
-    const outbox: { id: number; toHandle: string; body: string }[] = [];
-    const sent: string[] = [];
-    let state: DaemonState | null = { lastRowId: 0, knownHandles: [] };
-    const hub: HubClient = {
-      config: async () => ({ watchHandles: [HANDLES.instinct, HANDLES.stanley], approvalHandle: null, pollIntervalMs: 5000, paused: false }),
-      ingest: async (messages) => {
-        if (failures > 0) {
-          failures--;
-          throw new Error('ECONNREFUSED');
-        }
-        if (opts.rejectText && messages.some((m) => m.text === opts.rejectText)) throw new HubHttpError(400, 'bad');
-        shipped.push(...messages);
-      },
-      outbox: async () => outbox.splice(0),
-      ack: async (id, ok) => {
-        acks.push([id, ok]);
-      },
-      heartbeat: async () => undefined,
-    };
-    let clock = Date.now();
-    const d = new Daemon({
-      chatDbPath: dbPath,
-      hub,
-      state: { load: async () => state, save: async (s) => void (state = structuredClone(s)) },
-      send: async (_h, body) => void sent.push(body),
-      log: createLogger({ test: true }),
-      pageSize: 3,
-      now: () => clock,
-    });
-    cleanups.push(() => d.close());
-    return { d, shipped, acks, outbox, sent, fixture, getState: () => state, advance: (ms: number) => (clock += ms) };
-  }
-
-  it('isolates a poison message instead of wedging, keeps order, and never re-sends after a lost ack', async () => {
-    const h = harness({
-      rows: [
-        { handle: HANDLES.instinct, text: 'one' },
-        { handle: HANDLES.stanley, text: 'two' },
-        { handle: HANDLES.instinct, text: 'POISON' },
-        { handle: HANDLES.instinct, text: 'four' },
-        { handle: '+15550003333', text: 'not watched' },
-        { handle: HANDLES.stanley, text: 'six' },
-      ],
-      rejectText: 'POISON',
-    });
-    const r = await h.d.cycle();
-    expect(r.error).toBeNull();
-    expect(h.shipped.map((m) => m.text)).toEqual(['one', 'two', 'four', 'six']);
-    expect(r.skipped).toBe(1);
-    expect(h.getState()!.lastRowId).toBe(6);
-    expect(h.getState()!.skipped).toEqual([3]);
-
-    h.outbox.push({ id: 7, toHandle: HANDLES.approval, body: 'approve?' });
-    await h.d.cycle();
-    h.outbox.push({ id: 7, toHandle: HANDLES.approval, body: 'approve?' }); // ack lost; hub re-offers it
-    await h.d.cycle();
-    expect(h.sent).toEqual(['approve?']);
-    expect(h.acks).toEqual([[7, true], [7, true]]);
-  });
-
-  it('holds the checkpoint while the hub is down, then catches up with nothing lost', async () => {
-    const h = harness({ rows: [{ handle: HANDLES.instinct, text: 'a' }, { handle: HANDLES.instinct, text: 'b' }], failIngest: 1 });
-    const r1 = await h.d.cycle();
-    expect(r1.error).toContain('ECONNREFUSED');
-    expect(h.getState()!.lastRowId).toBe(0);
-    h.advance(10_000);
-    await h.d.cycle();
-    expect(h.shipped.map((m) => m.text)).toEqual(['a', 'b']);
-  });
-
-  it('detects a wake from sleep and reopens chat.db', async () => {
-    const h = harness({ rows: [{ handle: HANDLES.instinct, text: 'before' }] });
-    await h.d.cycle();
-    h.advance(12 * 3600_000);
-    h.fixture.add({ handle: HANDLES.instinct, text: 'after sleep' });
-    const r = await h.d.cycle();
-    expect(r.resumedAfterMs).toBe(12 * 3600_000);
-    expect(h.shipped.map((m) => m.text)).toEqual(['before', 'after sleep']);
   });
 });

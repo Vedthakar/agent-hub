@@ -3,39 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
-import { decodeAttributedBody } from '../src/daemon/attributedBody.js';
-import { ChatDb, appleDateToIso, normalizeHandle } from '../src/daemon/chatdb.js';
-
-/** Mimics the typedstream layout macOS writes for NSAttributedString. */
-function attributedBody(text: string): Uint8Array {
-  const utf8 = Buffer.from(text, 'utf8');
-  let len: Buffer;
-  if (utf8.length < 0x80) len = Buffer.from([utf8.length]);
-  else if (utf8.length <= 0xffff) {
-    len = Buffer.alloc(3);
-    len[0] = 0x81;
-    len.writeUInt16LE(utf8.length, 1);
-  } else {
-    len = Buffer.alloc(5);
-    len[0] = 0x82;
-    len.writeUInt32LE(utf8.length, 1);
-  }
-  return Buffer.concat([
-    Buffer.from([0x04, 0x0b]),
-    Buffer.from('streamtyped'),
-    Buffer.from([0x81, 0xe8, 0x03, 0x84, 0x01, 0x40, 0x84, 0x84, 0x84]),
-    Buffer.from([0x12]),
-    Buffer.from('NSAttributedString'),
-    Buffer.from([0x00, 0x84, 0x84, 0x08]),
-    Buffer.from('NSObject'),
-    Buffer.from([0x00, 0x85, 0x92, 0x84, 0x84, 0x84, 0x08]),
-    Buffer.from('NSString'),
-    Buffer.from([0x01, 0x94, 0x84, 0x01, 0x2b]),
-    len,
-    utf8,
-    Buffer.from([0x86, 0x84, 0x02, 0x69, 0x49, 0x01]),
-  ]);
-}
+import { decodeAttributedBody } from '../../src/daemon/attributedBody.js';
+import { ChatDb, appleDateToIso, normalizeHandle } from '../../src/daemon/chatdb.js';
+import { attributedBody } from '../fixtures/chatdb.js';
 
 describe('attributedBody', () => {
   it('decodes short, long and unicode bodies', () => {
@@ -45,9 +15,56 @@ describe('attributedBody', () => {
     expect(decodeAttributedBody(attributedBody('shoot tomorrow 🎬 ✓'))).toBe('shoot tomorrow 🎬 ✓');
   });
 
+  it('handles every length-prefix boundary (1-byte, 0x81 int16, 0x82 int32)', () => {
+    for (const n of [0, 1, 127, 128, 255, 256, 65_535, 65_536, 70_000]) {
+      const text = 'a'.repeat(n);
+      expect(decodeAttributedBody(attributedBody(text))?.length, `length ${n}`).toBe(n);
+    }
+    // Multi-byte characters: the prefix counts UTF-8 bytes, not characters.
+    const emoji = '🎬'.repeat(40); // 160 bytes
+    expect(decodeAttributedBody(attributedBody(emoji))).toBe(emoji);
+  });
+
+  it('returns null for truncated blobs instead of reading past the end', () => {
+    const full = Buffer.from(attributedBody('x'.repeat(300)));
+    const lenAt = full.indexOf(0x2b, full.indexOf('NSString')) + 1;
+    expect(full[lenAt]).toBe(0x81);
+    expect(decodeAttributedBody(full.subarray(0, lenAt + 2))).toBeNull(); // half the int16
+    expect(decodeAttributedBody(full.subarray(0, lenAt + 3 + 100))).toBeNull(); // body cut short
+    expect(decodeAttributedBody(full.subarray(0, lenAt))).toBeNull(); // ends at the '+'
+  });
+
   it('returns null on garbage', () => {
     expect(decodeAttributedBody(Buffer.from('nothing here'))).toBeNull();
     expect(decodeAttributedBody(null)).toBeNull();
+    expect(decodeAttributedBody(new Uint8Array())).toBeNull();
+    // NSString present but no '+' marker nearby.
+    expect(decodeAttributedBody(Buffer.concat([Buffer.from('NSString'), Buffer.alloc(40)]))).toBeNull();
+    // Unsupported length tag (0x83 is a float in typedstream).
+    expect(decodeAttributedBody(Buffer.concat([Buffer.from('NSString'), Buffer.from([0x01, 0x2b, 0x83, 0x01])]))).toBeNull();
+    // Random bytes never throw.
+    for (let i = 0; i < 200; i++) {
+      const junk = Buffer.concat([Buffer.from('NSString\x01\x2b'), Buffer.from(Array.from({ length: i % 17 }, () => Math.floor(Math.random() * 256)))]);
+      expect(() => decodeAttributedBody(junk)).not.toThrow();
+    }
+  });
+
+  it('decodes from a Uint8Array view with a non-zero offset (as node:sqlite returns)', () => {
+    const blob = attributedBody('offset view');
+    const padded = new Uint8Array(blob.length + 10);
+    padded.set(blob, 10);
+    expect(decodeAttributedBody(padded.subarray(10))).toBe('offset view');
+  });
+});
+
+describe('chat.db access', () => {
+  it('opens read-only: Messages’ database can never be written by the daemon', () => {
+    const file = path.join(mkdtempSync(path.join(os.tmpdir(), 'chatdb-')), 'chat.db');
+    new DatabaseSync(file).exec('CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT)');
+    const reader = new ChatDb(file);
+    const inner = (reader as unknown as { db: DatabaseSync }).db;
+    expect(() => inner.exec("INSERT INTO message (text) VALUES ('x')")).toThrow(/readonly/i);
+    reader.close();
   });
 });
 

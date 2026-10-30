@@ -240,11 +240,18 @@ BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
       EXECUTE format('REVOKE ALL ON TABLE %I FROM authenticated', t);
     END IF;
+    -- The hub talks to Postgres directly and never uses PostgREST, so not even the service key gets in.
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+      EXECUTE format('REVOKE ALL ON TABLE %I FROM service_role', t);
+    END IF;
   END LOOP;
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
     REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon;
   END IF;
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM authenticated;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM service_role;
   END IF;
 END $$;

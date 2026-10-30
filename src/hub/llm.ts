@@ -103,7 +103,9 @@ export function extractJson(text: string): unknown {
   try {
     return JSON.parse(candidate.slice(start, end + 1));
   } catch (err) {
-    throw new LlmError(`malformed JSON in model reply: ${(err as Error).message}`, true);
+    // V8's message quotes part of the input, which is conversation content; keep only the position.
+    const at = /position (\d+)/.exec((err as Error).message)?.[1];
+    throw new LlmError(`malformed JSON in model reply${at ? ` at position ${at}` : ''}`, true);
   }
 }
 

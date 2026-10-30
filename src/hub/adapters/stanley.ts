@@ -37,7 +37,11 @@ export const stanley: Adapter = {
       }
       throw err;
     }
-    if (!msgs.length) return 0;
+    if (!msgs.length) {
+      // An empty thread has no history to skip; without this the first real exchange would be.
+      if (lastId === null) await ctx.store.setSetting(LAST_ID_KEY, 0);
+      return 0;
+    }
     if (lastId === null) {
       // First run: start from "now" rather than importing the whole chat history.
       await ctx.store.setSetting(LAST_ID_KEY, msgs[msgs.length - 1].id);

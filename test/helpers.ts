@@ -8,6 +8,9 @@ import { createApp } from '../src/hub/server.js';
 import { Store } from '../src/hub/store.js';
 import { createTransports, type Transports } from '../src/hub/transports/index.js';
 import type { EmailTransport } from '../src/hub/transports/email.js';
+import type { SmsTransport } from '../src/hub/transports/sms.js';
+import type { TelegramUserTransport } from '../src/hub/transports/telegramUser.js';
+import { backend, freshDatabase, type Backend } from './support/db.js';
 
 export const HANDLES = {
   instinct: '+1 (555) 000-1111',
@@ -58,7 +61,56 @@ export function fakeEmail(): FakeEmail {
 
 export const INSTINCT_EMAIL = 'ved.instinct@forward.example.com';
 
-export async function makeHub(env: Record<string, string> = {}, llm: Llm | null = fakeLlm(), overrides: Partial<Transports> = {}) {
+/** Stanley's Telegram chat, as the user's MTProto client sees it. `reply()` simulates Stan answering. */
+export interface FakeTelegram extends TelegramUserTransport {
+  chat: { id: number; text: string; out: boolean; at: Date }[];
+  reply(text: string): void;
+  failWith: string | null;
+}
+
+export function fakeTelegram(): FakeTelegram {
+  let id = 0;
+  const tg: FakeTelegram = {
+    chat: [],
+    failWith: null,
+    reply(text) {
+      tg.chat.push({ id: ++id, text, out: false, at: new Date() });
+    },
+    async send(text) {
+      if (tg.failWith) throw new Error(tg.failWith);
+      tg.chat.push({ id: ++id, text, out: true, at: new Date() });
+      return id;
+    },
+    async fetchSince(minId) {
+      return tg.chat.filter((m) => m.id > minId);
+    },
+  };
+  return tg;
+}
+
+export interface FakeSms extends SmsTransport {
+  sent: string[];
+}
+
+export function fakeSms(): FakeSms {
+  const sms: FakeSms = {
+    sent: [],
+    async send(text) {
+      sms.sent.push(text);
+    },
+  };
+  return sms;
+}
+
+/** Stanley wired up (so config checks pass) but talking to `fakeTelegram()`. */
+export const STANLEY_ENV = { TELEGRAM_API_ID: '1', TELEGRAM_API_HASH: 'x', TELEGRAM_SESSION: 'x', STANLEY_TELEGRAM_PEER: '@stan' };
+
+export async function makeHub(
+  env: Record<string, string> = {},
+  llm: Llm | null = fakeLlm(),
+  overrides: Partial<Transports> = {},
+  opts: { backend?: Backend } = {},
+) {
   const cfg: HubConfig = loadConfig({
     HUB_OWNER_NAME: 'Ved',
     HUB_OWNER_PASSWORD: 'hunter2',
@@ -73,13 +125,24 @@ export async function makeHub(env: Record<string, string> = {}, llm: Llm | null 
     INSTINCT_EMAIL,
     ...env,
   });
-  const db = await openDb({ databaseUrl: null, pgliteDir: null });
-  const store = new Store(db);
+  const which = opts.backend ?? backend();
+  const fresh = which === 'supabase' ? await freshDatabase() : null;
+  const raw = await openDb({ databaseUrl: fresh?.url ?? null, pgliteDir: null, maxConnections: 4 });
+  const db = {
+    ...raw,
+    async close() {
+      await raw.close();
+      await fresh?.drop();
+    },
+  };
+  const store = new Store(raw);
   await store.ensureDefaultScopes();
   const email = fakeEmail();
-  const transports: Transports = { ...createTransports(cfg, store), email, ...overrides };
+  const telegram = fakeTelegram();
+  const sms = fakeSms();
+  const transports: Transports = { ...createTransports(cfg, store), email, telegramUser: telegram, sms, telegramBot: null, imap: null, ...overrides };
   const hub = new Hub(store, cfg, transports, llm);
-  return { hub, store, cfg, db, llm: llm as FakeLlm, email, transports };
+  return { hub, store, cfg, db, llm: llm as FakeLlm, email, telegram, sms, transports, backend: which, databaseUrl: fresh?.url ?? null };
 }
 
 export async function serve(hub: Hub) {

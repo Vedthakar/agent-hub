@@ -14,8 +14,8 @@ export interface Db {
   close(): Promise<void>;
 }
 
-export async function openDb(opts: { databaseUrl: string | null; pgliteDir?: string | null }): Promise<Db> {
-  const db = opts.databaseUrl ? await openPostgres(opts.databaseUrl) : await openPglite(opts.pgliteDir ?? null);
+export async function openDb(opts: { databaseUrl: string | null; pgliteDir?: string | null; maxConnections?: number }): Promise<Db> {
+  const db = opts.databaseUrl ? await openPostgres(opts.databaseUrl, opts.maxConnections ?? 10) : await openPglite(opts.pgliteDir ?? null);
   await migrate(db);
   return db;
 }
@@ -24,10 +24,10 @@ interface PgLike {
   unsafe(text: string, params?: never[]): Promise<unknown>;
 }
 
-async function openPostgres(url: string): Promise<Db> {
+async function openPostgres(url: string, max: number): Promise<Db> {
   const { default: postgres } = await import('postgres');
   const sql = postgres(url, {
-    max: 10,
+    max,
     onnotice: () => {},
     ssl: /localhost|127\.0\.0\.1|sslmode=disable/.test(url) ? false : 'require',
     types: {
@@ -36,7 +36,8 @@ async function openPostgres(url: string): Promise<Db> {
   });
   const wrap = (conn: PgLike, inTx: boolean): Db => ({
     async query<T>(text: string, params: unknown[] = []) {
-      const rows = await conn.unsafe(text, params as never[]);
+      // JSON values are passed pre-serialized with an explicit ::text::jsonb cast; undefined means NULL, as in PGlite.
+      const rows = await conn.unsafe(text, params.map((p) => (p === undefined ? null : p)) as never[]);
       return normalizeRows(rows as Record<string, unknown>[]) as T[];
     },
     async exec(text: string) {

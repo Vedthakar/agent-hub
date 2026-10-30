@@ -113,7 +113,7 @@ export class Store {
   // ---------- audit / settings ----------
 
   async audit(actor: string, action: string, detail: Record<string, unknown> = {}): Promise<void> {
-    await this.db.query('INSERT INTO audit (actor, action, detail) VALUES ($1, $2, $3)', [actor, action, JSON.stringify(detail)]);
+    await this.db.query('INSERT INTO audit (actor, action, detail) VALUES ($1, $2, $3::text::jsonb)', [actor, action, JSON.stringify(detail)]);
   }
 
   async recentAudit(limit = 200): Promise<{ id: number; at: Date; actor: string; action: string; detail: Record<string, unknown> }[]> {
@@ -127,7 +127,7 @@ export class Store {
 
   async setSetting(key: string, value: unknown): Promise<void> {
     await this.db.query(
-      `INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, now())
+      `INSERT INTO settings (key, value, updated_at) VALUES ($1, $2::text::jsonb, now())
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
       [key, JSON.stringify(value)],
     );
@@ -285,7 +285,10 @@ export class Store {
     );
   }
 
-  /** Inserting into an occupied slot supersedes the older item(s) in that slot. */
+  /**
+   * Inserting into an occupied slot supersedes the older item(s) in that slot. Items produced by the same
+   * event don't supersede each other: a debrief puts every commitment for tomorrow in "plan:<date>".
+   */
   async addSituation(s: {
     text: string;
     slot: string | null;
@@ -304,8 +307,8 @@ export class Store {
     if (s.slot) {
       await this.db.query(
         `UPDATE situation SET superseded_by = $1, superseded_at = now()
-         WHERE slot = $2 AND id <> $1 AND superseded_at IS NULL`,
-        [row.id, s.slot],
+         WHERE slot = $2 AND id <> $1 AND superseded_at IS NULL AND origin_event_id IS DISTINCT FROM $3::bigint`,
+        [row.id, s.slot, s.originEventId],
       );
     }
     return row;
@@ -539,11 +542,16 @@ export class Store {
   }
 
   /** The most recent task delivered to `agent` within `withinMs`, used to attribute hop counts to its replies. */
-  async lastTaskSentTo(agent: AgentId, withinMs: number, before = new Date()): Promise<TaskRow | undefined> {
+  /**
+   * The task most likely to have prompted an agent's reply at `before`. `sent_at` is stamped by the database
+   * clock while message times come from the Mac, so allow for skew; under-attributing would let a fast
+   * agent-to-agent ping-pong restart at hop 0.
+   */
+  async lastTaskSentTo(agent: AgentId, withinMs: number, before = new Date(), skewMs = 120_000): Promise<TaskRow | undefined> {
     const rows = await this.db.query<TaskRow>(
       `SELECT * FROM tasks WHERE target_agent = $1 AND sent_at IS NOT NULL AND sent_at >= $2 AND sent_at <= $3
        ORDER BY sent_at DESC LIMIT 1`,
-      [agent, new Date(before.getTime() - withinMs), before],
+      [agent, new Date(before.getTime() - withinMs), new Date(before.getTime() + skewMs)],
     );
     return rows[0];
   }

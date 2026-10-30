@@ -18,5 +18,6 @@ smoke.env
 # Local state
 .data/
 state.json
+state.json.*
 supabase/.branches/
 supabase/.temp/

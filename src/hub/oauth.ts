@@ -48,7 +48,7 @@ export class HubOAuthProvider implements OAuthServerProvider {
       },
       registerClient: async (client) => {
         const full = client as OAuthClientInformationFull;
-        await this.store.db.query('INSERT INTO oauth_clients (client_id, info) VALUES ($1, $2)', [full.client_id, JSON.stringify(full)]);
+        await this.store.db.query('INSERT INTO oauth_clients (client_id, info) VALUES ($1, $2::text::jsonb)', [full.client_id, JSON.stringify(full)]);
         await this.store.audit('oauth', 'client.registered', { client_id: full.client_id, name: full.client_name ?? null });
         return full;
       },

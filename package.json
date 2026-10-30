@@ -16,7 +16,14 @@
     "start": "node dist/hub/main.js",
     "start:daemon": "node dist/daemon/main.js",
     "typecheck": "tsc -p tsconfig.test.json",
-    "test": "vitest run",
+    "test": "vitest run --coverage",
+    "test:unit": "vitest run --project unit --project golden",
+    "test:supabase": "vitest run --project supabase",
+    "test:offline": "HUB_TEST_DB=pglite vitest run",
+    "golden:record": "GOLDEN_RECORD=1 vitest run --project golden",
+    "golden:rehash": "GOLDEN_REHASH=1 vitest run --project golden",
+    "supabase:start": "supabase start -x studio,imgproxy,mailpit,storage-api,realtime,edge-runtime,logflare,vector,supavisor,postgres-meta,gotrue",
+    "smoke": "tsx scripts/smoke.ts",
     "telegram:login": "tsx scripts/telegram-login.ts"
   },
   "dependencies": {

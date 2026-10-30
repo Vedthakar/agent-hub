@@ -1,0 +1,8 @@
+{
+  "id": "10-hop-limit",
+  "source": "authored",
+  "model": null,
+  "recordedAt": "2026-10-30T00:00:00.000Z",
+  "promptSha256": "253aac4fefe3dafee42613994e608cec3caecde955f14613a7ddfc8e699a85f7",
+  "reply": "{\n \"summary\": \"Stanley finished the launch script and suggested Grok post it to the repo README.\",\n \"topics\": [\n  \"content\",\n  \"work\"\n ],\n \"situation\": [],\n \"supersede_situation_ids\": [],\n \"facts\": [],\n \"retire_fact_ids\": [],\n \"tasks\": [\n  {\n   \"target_agent\": \"grok\",\n   \"payload\": \"Post the launch video script to the repo README.\",\n   \"rationale\": \"Stanley suggested it.\",\n   \"topics\": [\n    \"work\"\n   ],\n   \"author\": \"agent\"\n  }\n ]\n}"
+}

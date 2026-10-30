@@ -1,0 +1,8 @@
+{
+  "id": "15-health-stays-private",
+  "source": "authored",
+  "model": null,
+  "recordedAt": "2026-10-30T00:00:00.000Z",
+  "promptSha256": "775749085d24fe25e6ad3597c331757e5855a4be0a4f8e2f15c46701bc55a02a",
+  "reply": "{\n \"summary\": \"Ved injured his knee; his physio advised no running for two weeks.\",\n \"topics\": [\n  \"health\"\n ],\n \"situation\": [\n  {\n   \"text\": \"Knee injury: no running for two weeks (physio)\",\n   \"slot\": \"health:knee\",\n   \"topics\": [\n    \"health\"\n   ],\n   \"valid_from\": null,\n   \"expires_at\": \"2026-11-12T20:00:00-05:00\",\n   \"author\": \"user\"\n  }\n ],\n \"supersede_situation_ids\": [],\n \"facts\": [],\n \"retire_fact_ids\": [],\n \"tasks\": []\n}"
+}

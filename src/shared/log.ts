@@ -46,9 +46,8 @@ export function setLogSink(fn: (line: string, level: Level) => void): () => void
 }
 
 export function createLogger(base: Record<string, unknown> = {}): Logger {
-  const min = ORDER[(process.env.LOG_LEVEL as Level) ?? 'info'] ?? ORDER.info;
   const emit = (level: Level, msg: string, fields?: Record<string, unknown>) => {
-    if (ORDER[level] < min) return;
+    if (ORDER[level] < (ORDER[process.env.LOG_LEVEL as Level] ?? ORDER.info)) return;
     const record = { ts: new Date().toISOString(), level, msg, ...(redact({ ...base, ...fields }) as object) };
     sink(JSON.stringify(record), level);
   };
