@@ -1,0 +1,46 @@
+{
+  "name": "agent-hub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Make all of your AI agents act as one coherent unit: silent context sync + cross-agent triggers.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "tsx watch src/hub/main.ts",
+    "hub": "tsx src/hub/main.ts",
+    "daemon": "tsx src/daemon/main.ts",
+    "build": "tsc -p tsconfig.json && cp src/hub/schema.sql dist/hub/schema.sql",
+    "start": "node dist/hub/main.js",
+    "start:daemon": "node dist/daemon/main.js",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "vitest run",
+    "telegram:login": "tsx scripts/telegram-login.ts"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.13",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "dotenv": "^18.0.9",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.2",
+    "imapflow": "^2.10.0",
+    "mailparser": "^3.14.1",
+    "nodemailer": "^10.3.1",
+    "postgres": "^4.0.0",
+    "telegram": "^2.26.22",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/mailparser": "^3.9.0",
+    "@types/node": "^26.6.6",
+    "@types/nodemailer": "^8.0.2",
+    "@vitest/coverage-v8": "^5.0.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}

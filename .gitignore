@@ -1,0 +1,22 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+
+# Secrets: never commit. Only the example template is tracked.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.session
+secrets/
+smoke.env
+
+# Local state
+.data/
+state.json
+supabase/.branches/
+supabase/.temp/
