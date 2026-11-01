@@ -45,10 +45,10 @@ describe('situation TTL', () => {
     const e = await event();
     await applyRouterOutput(ctx.store, ctx.cfg, e, output({
       situation: [
-        { text: 'no expiry given', slot: null, topics: [], author: 'user' },
-        { text: 'stale', slot: null, topics: [], expires_at: at(-H).toISOString(), author: 'user' },
-        { text: '   ', slot: null, topics: [], author: 'user' },
-        { text: 'bad dates', slot: null, topics: [], valid_from: 'tomorrow-ish', expires_at: 'soon', author: 'user' },
+        { text: 'no expiry given', slot: null, topics: [], evidence: [] },
+        { text: 'stale', slot: null, topics: [], expires_at: at(-H).toISOString(), evidence: [] },
+        { text: '   ', slot: null, topics: [], evidence: [] },
+        { text: 'bad dates', slot: null, topics: [], valid_from: 'tomorrow-ish', expires_at: 'soon', evidence: [] },
       ],
     }));
     const rows = await ctx.store.db.query<{ text: string; valid_from: Date; expires_at: Date }>('SELECT * FROM situation ORDER BY id');
@@ -74,12 +74,12 @@ describe('situation supersession', () => {
   it('items from the same conversation share a slot without replacing each other (debrief plan)', async () => {
     const e = await event('instinct');
     await applyRouterOutput(ctx.store, ctx.cfg, e, output({
-      situation: ['study 9–11', 'shoot at 3', 'gym at 6'].map((text) => ({ text, slot: 'plan:tomorrow', topics: ['plan'], author: 'user' as const })),
+      situation: ['study 9–11', 'shoot at 3', 'gym at 6'].map((text) => ({ text, slot: 'plan:tomorrow', topics: ['plan'], evidence: [] as string[] })),
     }));
     expect((await live()).sort()).toEqual(['gym at 6', 'shoot at 3', 'study 9–11']);
     // The next night's debrief replaces the whole plan.
     const e2 = await event('instinct');
-    await applyRouterOutput(ctx.store, ctx.cfg, e2, output({ situation: [{ text: 'rest day', slot: 'plan:tomorrow', topics: ['plan'], author: 'user' }] }));
+    await applyRouterOutput(ctx.store, ctx.cfg, e2, output({ situation: [{ text: 'rest day', slot: 'plan:tomorrow', topics: ['plan'], evidence: [] }] }));
     expect(await live()).toEqual(['rest day']);
   });
 
@@ -107,8 +107,8 @@ describe('facts', () => {
     const e = await event();
     await applyRouterOutput(ctx.store, ctx.cfg, e, output({
       facts: [
-        { text: 'Goal: ship Agent Hub v1', kind: 'goal', topics: ['projects'], author: 'user' },
-        { text: 'goal: ship agent hub v1', kind: 'goal', topics: ['projects'], author: 'user' },
+        { text: 'Goal: ship Agent Hub v1', kind: 'goal', topics: ['projects'], evidence: [] },
+        { text: 'goal: ship agent hub v1', kind: 'goal', topics: ['projects'], evidence: [] },
       ],
     }));
     const facts = await ctx.store.activeFacts();

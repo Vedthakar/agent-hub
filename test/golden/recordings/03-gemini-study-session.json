@@ -3,6 +3,6 @@
   "source": "authored",
   "model": null,
   "recordedAt": "2026-10-30T00:00:00.000Z",
-  "promptSha256": "79f4131bd82d299e9e11e589a695eaf114a34929d6a52e356d0e36ca48eda7f4",
-  "reply": "{\n \"summary\": \"Ved studied eigenvalues and diagonalization for two hours with Gemini to prepare for Monday’s linear algebra midterm.\",\n \"topics\": [\n  \"school\"\n ],\n \"situation\": [\n  {\n   \"text\": \"Linear algebra midterm on Monday Nov 2; studied diagonalization today\",\n   \"slot\": \"school:midterm\",\n   \"topics\": [\n    \"school\"\n   ],\n   \"valid_from\": null,\n   \"expires_at\": \"2026-11-02T23:59:00-05:00\",\n   \"author\": \"user\"\n  }\n ],\n \"supersede_situation_ids\": [],\n \"facts\": [],\n \"retire_fact_ids\": [],\n \"tasks\": []\n}"
+  "promptSha256": "965c76e7ecd4d065e3d41dc6b179e690c3c90da6a12f3646762fadef8119f409",
+  "reply": "{\n \"summary\": \"Ved studied eigenvalues and diagonalization for two hours with Gemini to prepare for Monday’s linear algebra midterm.\",\n \"topics\": [\n  \"school\"\n ],\n \"situation\": [\n  {\n   \"text\": \"Linear algebra midterm on Monday Nov 2; studied diagonalization today\",\n   \"slot\": \"school:midterm\",\n   \"topics\": [\n    \"school\"\n   ],\n   \"valid_from\": null,\n   \"expires_at\": \"2026-11-02T23:59:00-05:00\",\n   \"evidence\": []\n  }\n ],\n \"supersede_situation_ids\": [],\n \"facts\": [],\n \"retire_fact_ids\": [],\n \"tasks\": []\n}"
 }

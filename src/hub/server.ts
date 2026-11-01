@@ -9,10 +9,59 @@ import { log } from '../shared/log.js';
 import { safeEqual } from './crypto.js';
 import { dashboardRouter } from './dashboard.js';
 import { hubHealth, publicHealth } from './health.js';
-import { normalizeHandle, type Hub } from './hub.js';
+import type { Hub } from './hub.js';
+import { sameHandle } from '../shared/handles.js';
 import { createMcpServer } from './mcp.js';
 import { HubOAuthProvider } from './oauth.js';
 import { verifyTwilio } from './transports/sms.js';
+import { signWebhook } from './adapters/grok.js';
+import { inbox, logSession, propose, updateTask } from './agentApi.js';
+import { renderSituation, situationFor } from './context.js';
+import type { HubConfig } from './config.js';
+import { TOPICS, type AgentId } from '../shared/types.js';
+
+export interface DaemonHeartbeat {
+  at: string;
+  lastRowId: number;
+  error: string | null;
+  version: string | null;
+  /** null until a daemon new enough to report it checks in. */
+  fullDiskAccess: boolean | null;
+  keepAwake: boolean | null;
+  /** The binary that needs Full Disk Access. */
+  nodePath: string | null;
+}
+
+const HOOK_SKEW_S = 300;
+
+/** The secret an agent's /hooks/<agent> calls are signed with (the same one signs the hub's nudges to it). */
+export function hookSecret(cfg: HubConfig, agent: AgentId): string | null {
+  return agent === 'grok' ? cfg.grokWebhookSecret : (cfg.agentWebhooks[agent]?.secret ?? null);
+}
+
+const Topics = z.array(z.enum(TOPICS)).optional();
+const HookBody = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('situation') }),
+  z.object({
+    type: z.literal('session'),
+    summary: z.string().min(1).max(4000),
+    decisions: z.array(z.string().max(1000)).max(50).optional(),
+    transcript_excerpt: z.string().max(8000).optional(),
+    topics: Topics,
+    task_code: z.string().max(16).optional(),
+  }),
+  z.object({ type: z.literal('inbox') }),
+  z.object({
+    type: z.literal('propose'),
+    target_agent: z.string().max(40),
+    task: z.string().min(1).max(4000),
+    reason: z.string().max(1000).optional(),
+    user_requested: z.boolean().optional(),
+    topics: Topics,
+    task_code: z.string().max(16).optional(),
+  }),
+  z.object({ type: z.literal('task_result'), task_code: z.string().max(16), status: z.enum(['done', 'failed']), result: z.string().max(4000).optional() }),
+]);
 
 const DaemonMessages = z.object({
   messages: z
@@ -35,14 +84,22 @@ export function createApp(hub: Hub): express.Express {
   const app = express();
   app.set('trust proxy', 1);
   app.disable('x-powered-by');
+  // The consent and dashboard pages take the owner password: never frameable, never sniffed, no referrers.
+  app.use((_req, res, next) => {
+    res.set({
+      'x-frame-options': 'DENY',
+      'content-security-policy': "frame-ancestors 'none'",
+      'x-content-type-options': 'nosniff',
+      'referrer-policy': 'no-referrer',
+    });
+    next();
+  });
 
-  const provider = new HubOAuthProvider(store, cfg);
+  const provider = new HubOAuthProvider(store, cfg, hub.connections);
   const mcpUrl = new URL(`${cfg.publicUrl}/mcp`);
 
-  const hasDaemonToken = (req: Request) => {
-    const token = (req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
-    return Boolean(cfg.daemonToken) && safeEqual(token, cfg.daemonToken!);
-  };
+  // The env token, or one the daemon got by pairing from the dashboard.
+  const hasDaemonToken = (req: Request) => hub.connections.verifyDaemonToken((req.headers.authorization ?? '').replace(/^Bearer\s+/i, ''));
 
   app.get('/healthz', (_req, res) => {
     res.json({ ok: true });
@@ -72,7 +129,20 @@ export function createApp(hub: Hub): express.Express {
       scopesSupported: ['hub'],
     }),
   );
-  app.post('/oauth/consent', express.urlencoded({ extended: false }), (req, res, next) => {
+  // The consent form takes the owner password, so it gets the same brute-force limit as the dashboard login.
+  const consentLimit = rateLimit({
+    windowMs: 15 * 60_000,
+    limit: cfg.rateLimit.loginPer15Min,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    requestWasSuccessful: (_req, res) => res.statusCode === 302,
+    skipSuccessfulRequests: true,
+    handler: (_req, res) => {
+      void store.audit('hub', 'oauth.consent_rate_limited', {});
+      res.status(429).send('Too many attempts. Try again in 15 minutes.');
+    },
+  });
+  app.post('/oauth/consent', consentLimit, express.urlencoded({ extended: false }), (req, res, next) => {
     provider.handleConsent(req, res).catch(next);
   });
 
@@ -126,6 +196,17 @@ export function createApp(hub: Hub): express.Express {
     }
     next();
   };
+  // Pairing trades a one-time code from the dashboard for the daemon's own token. Unauthenticated, so tightly limited.
+  const pairLimit = rateLimit({ windowMs: 15 * 60_000, limit: 10, standardHeaders: 'draft-7', legacyHeaders: false });
+  app.post('/daemon/pair', pairLimit, express.json({ limit: '4kb' }), async (req, res) => {
+    const token = await hub.connections.redeemPairingCode(String(req.body?.code ?? '').slice(0, 32));
+    if (!token) {
+      res.status(401).json({ error: 'That pairing code is wrong or expired. Make a new one in the dashboard.' });
+      return;
+    }
+    res.json({ token });
+  });
+
   const daemon = express.Router();
   daemon.use(express.json({ limit: '5mb' }), daemonAuth);
 
@@ -158,13 +239,34 @@ export function createApp(hub: Hub): express.Express {
     res.json({ ok: Boolean(row) });
   });
   daemon.post('/heartbeat', async (req, res) => {
-    await store.setSetting('daemon.heartbeat', {
+    const b = req.body ?? {};
+    const flag = (v: unknown) => (typeof v === 'boolean' ? v : null);
+    const str = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max) : null);
+    const hb: DaemonHeartbeat = {
       at: new Date().toISOString(),
-      lastRowId: Number(req.body?.lastRowId ?? 0),
-      error: req.body?.error ?? null,
-      version: req.body?.version ?? null,
-    });
+      lastRowId: Number(b.lastRowId ?? 0),
+      error: str(b.error, 500),
+      version: str(b.version, 40),
+      fullDiskAccess: flag(b.fullDiskAccess),
+      keepAwake: flag(b.keepAwake),
+      nodePath: str(b.nodePath, 300),
+    };
+    await store.setSetting('daemon.heartbeat', hb);
     res.json({ ok: true });
+  });
+  daemon.get('/jobs', async (_req, res) => {
+    const jobs = await store.claimJobs();
+    res.json({ jobs: jobs.map((j) => ({ id: j.id, kind: j.kind, args: j.args })) });
+  });
+  daemon.post('/jobs/:id', async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      res.status(404).end();
+      return;
+    }
+    const ok = req.body?.ok === true;
+    const row = await store.finishJob(id, ok, ok ? (req.body?.result ?? null) : null, ok ? null : String(req.body?.error ?? 'unknown').slice(0, 500));
+    res.json({ ok: Boolean(row) });
   });
   app.use('/daemon', daemon);
 
@@ -185,11 +287,72 @@ export function createApp(hub: Hub): express.Express {
     await hub.handleInbound({
       channel: 'sms',
       externalId: params.MessageSid,
-      fromOwner: Boolean(t.userNumber) && normalizeHandle(from) === normalizeHandle(t.userNumber!),
+      fromOwner: sameHandle(from, t.userNumber),
       sender: from,
       text: params.Body ?? '',
     });
     res.type('text/xml').send('<Response></Response>');
+  });
+
+  // ---------- signed webhook for agents that can't hold an MCP session (Grok Bot, custom agents) ----------
+  const hookLimit = rateLimit({ windowMs: 60_000, limit: cfg.rateLimit.mcpPerMinute, standardHeaders: 'draft-7', legacyHeaders: false });
+  const seenSignatures = new Map<string, number>();
+  app.post('/hooks/:agent', hookLimit, express.raw({ type: () => true, limit: '256kb' }), async (req, res) => {
+    const agent = req.params.agent;
+    const secret = isAgentId(agent) ? hookSecret(cfg, agent) : null;
+    if (!isAgentId(agent) || !secret) {
+      res.status(404).json({ error: 'no webhook for that agent' });
+      return;
+    }
+    const body = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : '';
+    const ts = req.get('x-hub-timestamp') ?? '';
+    const sig = req.get('x-hub-signature') ?? '';
+    const now = Date.now();
+    if (!/^\d{9,11}$/.test(ts) || Math.abs(now / 1000 - Number(ts)) > HOOK_SKEW_S || !safeEqual(sig, signWebhook(secret, ts, body))) {
+      await store.audit('hub', 'hook.bad_signature', { agent });
+      res.status(401).json({ error: 'bad or stale signature' });
+      return;
+    }
+    for (const [k, exp] of seenSignatures) if (exp < now) seenSignatures.delete(k);
+    if (seenSignatures.has(sig)) {
+      res.status(409).json({ error: 'replayed request' });
+      return;
+    }
+    seenSignatures.set(sig, now + 2 * HOOK_SKEW_S * 1000);
+    let parsed;
+    try {
+      parsed = HookBody.safeParse(JSON.parse(body));
+    } catch {
+      parsed = null;
+    }
+    if (!parsed?.success) {
+      res.status(400).json({ error: 'body must be JSON with a known "type"' });
+      return;
+    }
+    const call = parsed.data;
+    switch (call.type) {
+      case 'situation': {
+        const view = await situationFor(store, agent);
+        await store.touchRead(agent);
+        res.json({ text: renderSituation(view, cfg.ownerName, cfg.timezone), situation: view });
+        return;
+      }
+      case 'session':
+        res.json(await logSession(hub, agent, call));
+        return;
+      case 'inbox': {
+        const tasks = await inbox(hub, agent);
+        await store.touchRead(agent);
+        res.json({ tasks: tasks.map((t) => ({ code: t.code, from: t.origin_agent, payload: t.payload })) });
+        return;
+      }
+      case 'propose':
+        res.status(200).json(await propose(hub, agent, call));
+        return;
+      case 'task_result':
+        res.json(await updateTask(hub, agent, call));
+        return;
+    }
   });
 
   // ---------- dashboard ----------

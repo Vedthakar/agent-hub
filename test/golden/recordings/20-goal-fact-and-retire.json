@@ -3,6 +3,6 @@
   "source": "authored",
   "model": null,
   "recordedAt": "2026-10-30T00:00:00.000Z",
-  "promptSha256": "6fd0ad3f8e180dca77087a9fa8dc4e19ae137ab8a7d5bb907631f328d4508407",
-  "reply": "{\n \"summary\": \"Ved moved the Agent Hub public launch to Dec 1 so the security work can be finished first.\",\n \"topics\": [\n  \"projects\"\n ],\n \"situation\": [],\n \"supersede_situation_ids\": [],\n \"facts\": [\n  {\n   \"text\": \"Launch Agent Hub publicly by Dec 1\",\n   \"kind\": \"goal\",\n   \"topics\": [\n    \"projects\"\n   ],\n   \"author\": \"user\"\n  },\n  {\n   \"text\": \"Wants the security work done before launching\",\n   \"kind\": \"preference\",\n   \"topics\": [\n    \"projects\"\n   ],\n   \"author\": \"user\"\n  }\n ],\n \"retire_fact_ids\": [\n  1\n ],\n \"tasks\": []\n}"
+  "promptSha256": "b59f28df229cc0acd23cdee0f7c594e508cb15d0045803510277bf75a37fa579",
+  "reply": "{\n \"summary\": \"Ved moved the Agent Hub public launch to Dec 1 so the security work can be finished first.\",\n \"topics\": [\n  \"projects\"\n ],\n \"situation\": [],\n \"supersede_situation_ids\": [],\n \"facts\": [\n  {\n   \"text\": \"Launch Agent Hub publicly by Dec 1\",\n   \"kind\": \"goal\",\n   \"topics\": [\n    \"projects\"\n   ],\n   \"evidence\": []\n  },\n  {\n   \"text\": \"Wants the security work done before launching\",\n   \"kind\": \"preference\",\n   \"topics\": [\n    \"projects\"\n   ],\n   \"evidence\": []\n  }\n ],\n \"retire_fact_ids\": [\n  1\n ],\n \"tasks\": []\n}"
 }

@@ -5,6 +5,8 @@ export interface TelegramUserTransport {
   send(text: string): Promise<number>;
   /** All messages in the peer's chat with id > `minId`, oldest first (paginated, no gaps). */
   fetchSince(minId: number): Promise<{ id: number; text: string; out: boolean; at: Date }[]>;
+  /** Drops the connection (when the dashboard swaps in a new session). */
+  close?(): Promise<void>;
 }
 
 /** Telegram's FLOOD_WAIT: the server told us how long to back off. */
@@ -53,6 +55,11 @@ export function createTelegramUser(cfg: HubConfig['stanley']): TelegramUserTrans
   };
 
   return {
+    async close() {
+      const p = clientPromise;
+      clientPromise = null;
+      if (p) await (await p).disconnect().catch(() => undefined);
+    },
     send: (text) =>
       wrap(async () => {
         const sent = await (await client()).sendMessage(cfg.peer!, { message: text });

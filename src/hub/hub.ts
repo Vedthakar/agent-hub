@@ -8,18 +8,27 @@ import { debriefActive, noteDebriefStart, processPendingDebrief, queueDigestNow 
 import { dispatchApproved } from './dispatch.js';
 import { LlmError, backoffMs, type Llm } from './llm.js';
 import { routeEvent } from './router.js';
+import { REPLY_ATTRIBUTION_WINDOW_MS } from './tasks.js';
+import { normalizeHandle, sameHandle } from '../shared/handles.js';
 import type { RawMessageRow, Store } from './store.js';
 import type { Transports } from './transports/index.js';
+import { Connections } from './connections.js';
+import type { SecretStore } from './secrets.js';
+import { telegramLoginDriver, type TelegramLoginDriver } from './telegramLogin.js';
 
-const REPLY_ATTRIBUTION_WINDOW_MS = 12 * 3600_000;
 const ROUTE_BACKOFF_BASE_MS = 30_000;
 
-export function normalizeHandle(handle: string): string {
-  const h = handle.trim().toLowerCase();
-  if (h.includes('@')) return h;
-  const digits = h.replace(/\D/g, '');
-  return digits.length > 10 ? digits.slice(-10) : digits;
+export interface HubOptions {
+  secrets?: SecretStore | null;
+  /** The environment the config was loaded from; settings it defines are locked in the dashboard. */
+  env?: Record<string, string | undefined>;
+  makeTransports?: (cfg: HubConfig, store: Store) => Transports;
+  makeLlm?: (cfg: HubConfig['router']) => Llm | null;
 }
+
+export type MacInstaller = (hubUrl: string, pairingCode: string) => Promise<void>;
+
+export { normalizeHandle } from '../shared/handles.js';
 
 export interface TickReport {
   read: number;
@@ -39,14 +48,37 @@ export class Hub {
   private routing: Promise<number> = Promise.resolve(0);
   lastTick: { at: Date; ok: boolean; error?: string; report?: TickReport } | null = null;
 
+  readonly connections: Connections;
+  /** Drives the Stanley login on the Connections page; replaced with a fake in tests. */
+  telegramLogin: TelegramLoginDriver = telegramLoginDriver();
+  /** Installs the daemon when the hub itself runs on the Mac; replaced in tests. */
+  macInstaller: MacInstaller | null = null;
+
   constructor(
     readonly store: Store,
     readonly cfg: HubConfig,
     readonly transports: Transports,
-    readonly llm: Llm | null,
+    public llm: Llm | null,
+    private opts: HubOptions = {},
   ) {
     this.ctx = { store, cfg, transports };
     this.approvals = new Approvals({ store, cfg, transports, kick: () => this.kick() });
+    this.connections = new Connections(store, opts.secrets ?? null, cfg, opts.env ?? {});
+    this.connections.onChange = () => this.reconfigure();
+  }
+
+  /**
+   * Re-reads settings changed in the dashboard. With factories (production) the transports and router
+   * LLM are rebuilt from the new config; without them (tests) the injected fakes stay.
+   */
+  async reconfigure(): Promise<void> {
+    this.connections.apply();
+    if (this.opts.makeTransports) {
+      const next = this.opts.makeTransports(this.cfg, this.store);
+      await this.transports.telegramUser?.close?.().catch(() => undefined);
+      Object.assign(this.transports, next);
+    }
+    if (this.opts.makeLlm) this.llm = this.opts.makeLlm(this.cfg.router);
   }
 
   // ---------------------------------------------------------------- daemon
@@ -81,7 +113,7 @@ export class Hub {
       if (!text) continue;
       const sentAt = new Date(m.sentAt);
 
-      if (approvalHandle && normalizeHandle(m.handle) === normalizeHandle(approvalHandle)) {
+      if (approvalHandle && sameHandle(m.handle, approvalHandle)) {
         if (m.isFromMe && (await this.store.isHubSent(approvalHandle, text, sentAt))) continue;
         const outcome = await this.approvals.handleInbound({
           channel: 'imessage',

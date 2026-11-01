@@ -21,7 +21,7 @@ export default defineConfig({
         test: {
           ...shared,
           name: 'supabase',
-          include: ['test/integration/**/*.test.ts', 'test/e2e/**/*.test.ts', 'test/supabase/**/*.test.ts'],
+          include: ['test/integration/**/*.test.ts', 'test/e2e/**/*.test.ts', 'test/supabase/**/*.test.ts', 'test/security/**/*.test.ts'],
           globalSetup: ['test/support/globalSetup.ts'],
           maxWorkers: 4,
           // Runs after the offline projects, with its own worker cap (each worker holds DB connections).

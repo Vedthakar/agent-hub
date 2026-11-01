@@ -20,6 +20,14 @@ export async function openDb(opts: { databaseUrl: string | null; pgliteDir?: str
   return db;
 }
 
+/**
+ * Postgres text can't hold U+0000, and one such character would fail a whole ingest batch forever
+ * (a poison message). NULs are dropped from every bound string; `toJson` does the same inside JSON values.
+ */
+const bindable = (p: unknown) => (p === undefined ? null : typeof p === 'string' && p.includes('\u0000') ? p.replace(/\u0000/g, '') : p);
+
+export const toJson = (value: unknown) => JSON.stringify(value, (_k, v: unknown) => (typeof v === 'string' ? v.replace(/\u0000/g, '') : v));
+
 interface PgLike {
   unsafe(text: string, params?: never[]): Promise<unknown>;
 }
@@ -37,7 +45,7 @@ async function openPostgres(url: string, max: number): Promise<Db> {
   const wrap = (conn: PgLike, inTx: boolean): Db => ({
     async query<T>(text: string, params: unknown[] = []) {
       // JSON values are passed pre-serialized with an explicit ::text::jsonb cast; undefined means NULL, as in PGlite.
-      const rows = await conn.unsafe(text, params.map((p) => (p === undefined ? null : p)) as never[]);
+      const rows = await conn.unsafe(text, params.map(bindable) as never[]);
       return normalizeRows(rows as Record<string, unknown>[]) as T[];
     },
     async exec(text: string) {
@@ -66,7 +74,7 @@ async function openPglite(dir: string | null): Promise<Db> {
   await pg.waitReady;
   const wrap = (conn: PgliteLike, inTx: boolean): Db => ({
     async query<T>(text: string, params: unknown[] = []) {
-      const res = await conn.query(text, params);
+      const res = await conn.query(text, params.map(bindable));
       return normalizeRows(res.rows as Record<string, unknown>[]) as T[];
     },
     async exec(text: string) {

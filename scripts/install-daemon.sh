@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Installs the Agent Hub Mac daemon as a launchd user agent.
-#   ./scripts/install-daemon.sh            install / update and start
-#   ./scripts/install-daemon.sh uninstall  stop and remove
+#   ./scripts/install-daemon.sh pair <hub-url> <code>  pair with the hub (code from the dashboard), install, start
+#   ./scripts/install-daemon.sh                        install / update and start (already paired, or daemon.env)
+#   ./scripts/install-daemon.sh uninstall              stop and remove
 set -euo pipefail
 
 LABEL="com.agenthub.daemon"
@@ -21,18 +22,16 @@ fi
 [[ -n "$NODE" ]] || { echo "node not found on PATH"; exit 1; }
 mkdir -p "$SUPPORT" "$LOGS" "$HOME/Library/LaunchAgents"
 
-if [[ ! -f "$SUPPORT/daemon.env" ]]; then
-  cat > "$SUPPORT/daemon.env" <<EOF
-HUB_URL=https://your-hub.example.com
-HUB_DAEMON_TOKEN=
-# BACKFILL_HOURS=24
-EOF
-  chmod 600 "$SUPPORT/daemon.env"
-  echo "Created $SUPPORT/daemon.env. Fill in HUB_URL and HUB_DAEMON_TOKEN, then re-run this script."
-  exit 0
-fi
+(cd "$REPO" && { [[ -d node_modules ]] || npm install --silent; } && npm run build >/dev/null)
 
-(cd "$REPO" && npm run build >/dev/null)
+if [[ "${1:-}" == "pair" ]]; then
+  [[ -n "${2:-}" && -n "${3:-}" ]] || { echo "usage: $0 pair <hub-url> <pairing-code>"; exit 1; }
+  "$NODE" --no-warnings=ExperimentalWarning "$REPO/dist/daemon/main.js" pair "$2" "$3"
+elif [[ ! -f "$SUPPORT/daemon.json" && ! -f "$SUPPORT/daemon.env" ]]; then
+  echo "Not paired yet. Open your hub's dashboard → Connections → Your Mac and copy the pairing command."
+  echo "(Advanced: put HUB_URL and HUB_DAEMON_TOKEN in $SUPPORT/daemon.env instead.)"
+  exit 1
+fi
 
 cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -47,7 +46,7 @@ cat > "$PLIST" <<EOF
     <string>$REPO/dist/daemon/main.js</string>
   </array>
   <key>EnvironmentVariables</key>
-  <dict><key>AGENT_HUB_ENV</key><string>$SUPPORT/daemon.env</string></dict>
+  <dict><key>AGENT_HUB_ENV</key><string>$SUPPORT/daemon.env</string><key>AGENT_HUB_LAUNCHD</key><string>1</string></dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
@@ -64,10 +63,9 @@ launchctl bootstrap "gui/$(id -u)" "$PLIST"
 cat <<EOF
 Installed $LABEL. Logs: $LOGS/daemon.log
 
-One-time permissions:
+One-time permissions (the dashboard walks you through these and shows when they're granted):
   1. System Settings → Privacy & Security → Full Disk Access → add:
        $NODE
-     (the daemon only ever opens chat.db read-only)
+     (the daemon only ever opens chat.db read-only, and restarts itself to pick up the grant)
   2. The first outgoing message triggers a prompt to let node control Messages. Allow it.
-Then restart:  launchctl kickstart -k gui/$(id -u)/$LABEL
 EOF

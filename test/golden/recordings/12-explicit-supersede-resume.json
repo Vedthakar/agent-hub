@@ -3,6 +3,6 @@
   "source": "authored",
   "model": null,
   "recordedAt": "2026-10-30T00:00:00.000Z",
-  "promptSha256": "0c69740aecbededc5b483a48cd8b8b568de24bd1f2b2b800c53123d7b86996ef",
-  "reply": "{\n \"summary\": \"Ved ended the open-source pause early.\",\n \"topics\": [\n  \"open_source\"\n ],\n \"situation\": [],\n \"supersede_situation_ids\": [\n  1\n ],\n \"facts\": [],\n \"retire_fact_ids\": [],\n \"tasks\": [\n  {\n   \"target_agent\": \"grok\",\n   \"payload\": \"Resume open-source work now; the one-week pause is over early.\",\n   \"rationale\": \"\",\n   \"topics\": [\n    \"open_source\"\n   ],\n   \"author\": \"user\"\n  }\n ]\n}"
+  "promptSha256": "3e89a9cfe26ab13c6f4d9b2546a3b42a4d24f1c938e2b1475f0e370c3619282e",
+  "reply": "{\n \"summary\": \"Ved ended the open-source pause early.\",\n \"topics\": [\n  \"open_source\"\n ],\n \"situation\": [],\n \"supersede_situation_ids\": [\n  1\n ],\n \"facts\": [],\n \"retire_fact_ids\": [],\n \"tasks\": [\n  {\n   \"target_agent\": \"grok\",\n   \"payload\": \"Resume open-source work now; the one-week pause is over early.\",\n   \"rationale\": \"\",\n   \"topics\": [\n    \"open_source\"\n   ],\n   \"evidence\": []\n  }\n ]\n}"
 }

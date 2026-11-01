@@ -4,6 +4,8 @@ import { checkDelivery } from './guard.js';
 import { Store, type TaskRow } from './store.js';
 
 export const DEDUP_WINDOW_MS = 24 * 3600_000;
+/** Agent activity this soon after the hub sent it a task counts as part of that task's chain (hop count). */
+export const REPLY_ATTRIBUTION_WINDOW_MS = 12 * 3600_000;
 
 export type ProposeOutcome =
   | { kind: 'created'; task: TaskRow }

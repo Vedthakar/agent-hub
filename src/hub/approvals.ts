@@ -34,8 +34,10 @@ interface Deps {
 export class Approvals {
   constructor(private deps: Deps) {}
 
+  /** One line per task. Hand-offs not backed by the user's own messages say so, since an agent may have planted them. */
   describe(t: TaskRow): string {
-    return `[${t.code}] ${ADAPTERS[t.origin_agent]?.name ?? t.origin_agent} → ${ADAPTERS[t.target_agent]?.name ?? t.target_agent}: ${t.payload}`;
+    const flag = t.author === 'user' ? '' : ' (agent-suggested, not from your messages)';
+    return `[${t.code}] ${ADAPTERS[t.origin_agent]?.name ?? t.origin_agent} → ${ADAPTERS[t.target_agent]?.name ?? t.target_agent}${flag}: ${t.payload.replace(/\s*[\r\n]+\s*/g, ' ')}`;
   }
 
   /** Sends to the user's approval channel. Returns false if nothing was sent, so callers can retry. */

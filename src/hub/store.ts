@@ -1,5 +1,5 @@
 import { createHash, randomInt } from 'node:crypto';
-import type { Db } from './db.js';
+import { toJson, type Db } from './db.js';
 import { AGENT_IDS, type AgentId, type Author, type Autonomy, type TaskStatus } from '../shared/types.js';
 import { DEFAULT_SCOPES, type Scope } from './scopes.js';
 
@@ -113,7 +113,7 @@ export class Store {
   // ---------- audit / settings ----------
 
   async audit(actor: string, action: string, detail: Record<string, unknown> = {}): Promise<void> {
-    await this.db.query('INSERT INTO audit (actor, action, detail) VALUES ($1, $2, $3::text::jsonb)', [actor, action, JSON.stringify(detail)]);
+    await this.db.query('INSERT INTO audit (actor, action, detail) VALUES ($1, $2, $3::text::jsonb)', [actor, action, toJson(detail)]);
   }
 
   async recentAudit(limit = 200): Promise<{ id: number; at: Date; actor: string; action: string; detail: Record<string, unknown> }[]> {
@@ -129,7 +129,7 @@ export class Store {
     await this.db.query(
       `INSERT INTO settings (key, value, updated_at) VALUES ($1, $2::text::jsonb, now())
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      [key, JSON.stringify(value)],
+      [key, toJson(value)],
     );
   }
 
@@ -205,6 +205,15 @@ export class Store {
       `SELECT id, agent, external_id, channel, author, text, sent_at FROM raw_messages
        WHERE processed_at IS NULL AND agent = $1 ORDER BY sent_at, id`,
       [agent],
+    );
+  }
+
+  /** The conversation lines an event was built from, with authors as recorded at ingestion. */
+  async eventLines(eventId: number): Promise<RawMessageRow[]> {
+    return this.db.query(
+      `SELECT id, agent, external_id, channel, author, text, sent_at FROM raw_messages
+       WHERE event_id = $1 AND author <> 'hub' ORDER BY sent_at, id`,
+      [eventId],
     );
   }
 
@@ -658,6 +667,102 @@ export class Store {
     );
     return new Map(rows.map((r) => [r.agent, { queued: r.queued, retrying: r.retrying, failed24h: r.failed24h, awaitingApproval: r.awaiting }]));
   }
+
+  // ---------- connections ----------
+
+  async ensureScope(agent: AgentId, d: Omit<Scope, 'agent'>): Promise<void> {
+    await this.db.query(
+      `INSERT INTO scopes (agent, allow_topics, deny_topics, autonomy, enabled) VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (agent) DO NOTHING`,
+      [agent, d.allow_topics, d.deny_topics, d.autonomy, d.enabled],
+    );
+  }
+
+  async setAgentEnabled(agent: AgentId, enabled: boolean, actor: string): Promise<void> {
+    await this.db.query('UPDATE scopes SET enabled = $2, updated_at = now() WHERE agent = $1', [agent, enabled]);
+    await this.audit(actor, enabled ? 'agent.resumed' : 'agent.paused', { agent });
+  }
+
+  async deleteScope(agent: AgentId): Promise<void> {
+    await this.db.query('DELETE FROM scopes WHERE agent = $1', [agent]);
+    await this.db.query('DELETE FROM routes WHERE origin_agent = $1 OR target_agent = $1', [agent]);
+  }
+
+  /** Revokes every OAuth token issued to an agent (Disconnect). */
+  async revokeAgentTokens(agent: AgentId): Promise<number> {
+    const rows = await this.db.query('UPDATE oauth_tokens SET revoked = true WHERE agent = $1 AND NOT revoked RETURNING 1', [agent]);
+    return rows.length;
+  }
+
+  async hasOAuthConnection(agent: AgentId): Promise<boolean> {
+    const rows = await this.db.query(
+      `SELECT 1 FROM oauth_tokens WHERE agent = $1 AND kind = 'refresh' AND NOT revoked AND (expires_at IS NULL OR expires_at > now()) LIMIT 1`,
+      [agent],
+    );
+    return rows.length > 0;
+  }
+
+  async lastEventTimes(): Promise<Map<AgentId, Date>> {
+    const rows = await this.db.query<{ agent: AgentId; at: Date }>('SELECT agent, max(occurred_at) AS at FROM events GROUP BY agent');
+    return new Map(rows.map((r) => [r.agent, new Date(r.at)]));
+  }
+
+  async outboxItem(id: number): Promise<(OutboxRow & { error: string | null }) | undefined> {
+    const rows = await this.db.query<OutboxRow & { error: string | null }>('SELECT * FROM outbox WHERE id = $1', [id]);
+    return rows[0];
+  }
+
+  // ---------- daemon jobs ----------
+
+  async enqueueJob(kind: DaemonJobRow['kind'], args: Record<string, unknown> = {}): Promise<DaemonJobRow> {
+    const [row] = await this.db.query<DaemonJobRow>('INSERT INTO daemon_jobs (kind, args) VALUES ($1, $2::text::jsonb) RETURNING *', [kind, toJson(args)]);
+    return row;
+  }
+
+  /** Jobs for the daemon: pending ones, plus claims that were never finished. Old jobs are pruned (results can hold handles). */
+  async claimJobs(limit = 5): Promise<DaemonJobRow[]> {
+    await this.db.query("DELETE FROM daemon_jobs WHERE created_at < now() - interval '1 day'");
+    await this.db.query(
+      `UPDATE daemon_jobs SET status = 'failed', error = 'the Mac did not pick this up in time', done_at = now()
+       WHERE status = 'pending' AND created_at < now() - interval '10 minutes'`,
+    );
+    return this.db.query(
+      `UPDATE daemon_jobs SET status = 'claimed', claimed_at = now()
+       WHERE id IN (
+         SELECT id FROM daemon_jobs
+         WHERE status = 'pending' OR (status = 'claimed' AND claimed_at < now() - interval '2 minutes')
+         ORDER BY created_at, id LIMIT $1
+         FOR UPDATE SKIP LOCKED
+       ) RETURNING *`,
+      [limit],
+    );
+  }
+
+  async finishJob(id: number, ok: boolean, result: unknown, error: string | null): Promise<DaemonJobRow | undefined> {
+    const rows = await this.db.query<DaemonJobRow>(
+      `UPDATE daemon_jobs SET status = $2, result = $3::text::jsonb, error = $4, done_at = now()
+       WHERE id = $1 AND status = 'claimed' RETURNING *`,
+      [id, ok ? 'done' : 'failed', toJson(result ?? null), error],
+    );
+    return rows[0];
+  }
+
+  async job(id: number): Promise<DaemonJobRow | undefined> {
+    const rows = await this.db.query<DaemonJobRow>('SELECT * FROM daemon_jobs WHERE id = $1', [id]);
+    return rows[0];
+  }
+}
+
+export interface DaemonJobRow {
+  id: number;
+  kind: 'list-threads' | 'keep-awake' | 'open-settings';
+  args: Record<string, unknown>;
+  status: 'pending' | 'claimed' | 'done' | 'failed';
+  result: unknown;
+  error: string | null;
+  created_at: Date;
+  claimed_at: Date | null;
+  done_at: Date | null;
 }
 
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';

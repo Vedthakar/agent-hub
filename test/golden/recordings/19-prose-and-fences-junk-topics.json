@@ -3,6 +3,6 @@
   "source": "authored",
   "model": null,
   "recordedAt": "2026-10-30T00:00:00.000Z",
-  "promptSha256": "e8f7305d4887a752b88d0039d29f56162aa5ce08bc0981817092d28d9c7ba5cf",
-  "reply": "Here is the analysis you asked for:\n```json\n{\n \"summary\": \"Ved brainstormed names for a side project with Gemini.\",\n \"topics\": [\n  \"branding\",\n  \"ideas\"\n ],\n \"situation\": [\n  {\n   \"text\": \"Picking a naming direction for the side project\",\n   \"slot\": \"now:naming\",\n   \"topics\": [\n    \"brainstorm\"\n   ],\n   \"valid_from\": null,\n   \"expires_at\": null,\n   \"author\": \"user\"\n  }\n ],\n \"supersede_situation_ids\": [],\n \"facts\": [],\n \"retire_fact_ids\": [],\n \"tasks\": []\n}\n```\nLet me know if you need anything else!"
+  "promptSha256": "cc58f4d1490899ad04fc0a830f4cc98023b867f118110398cce9e4338d400009",
+  "reply": "Here is the analysis you asked for:\n```json\n{\n \"summary\": \"Ved brainstormed names for a side project with Gemini.\",\n \"topics\": [\n  \"branding\",\n  \"ideas\"\n ],\n \"situation\": [\n  {\n   \"text\": \"Picking a naming direction for the side project\",\n   \"slot\": \"now:naming\",\n   \"topics\": [\n    \"brainstorm\"\n   ],\n   \"valid_from\": null,\n   \"expires_at\": null,\n   \"evidence\": []\n  }\n ],\n \"supersede_situation_ids\": [],\n \"facts\": [],\n \"retire_fact_ids\": [],\n \"tasks\": []\n}\n```\nLet me know if you need anything else!"
 }

@@ -3,6 +3,6 @@
   "source": "authored",
   "model": null,
   "recordedAt": "2026-10-30T00:00:00.000Z",
-  "promptSha256": "b1431c9cf9f7ea2c0d35c7ff8433bd6d6ef2d153d0ad9d761c2989b56b67c9d7",
-  "reply": "{\n \"summary\": \"Ved finished his assessment early and is heading to the gym.\",\n \"topics\": [\n  \"schedule\",\n  \"health\"\n ],\n \"situation\": [\n  {\n   \"text\": \"At the gym (assessment finished)\",\n   \"slot\": \"now:activity\",\n   \"topics\": [\n    \"schedule\"\n   ],\n   \"valid_from\": null,\n   \"expires_at\": \"2026-10-29T21:30:00-04:00\",\n   \"author\": \"user\"\n  }\n ],\n \"supersede_situation_ids\": [],\n \"facts\": [],\n \"retire_fact_ids\": [],\n \"tasks\": []\n}"
+  "promptSha256": "16f0969d670160ebdbf9ba1c8a4a8b9717fa4b18bec7627faa1ed91b5a20e52d",
+  "reply": "{\n \"summary\": \"Ved finished his assessment early and is heading to the gym.\",\n \"topics\": [\n  \"schedule\",\n  \"health\"\n ],\n \"situation\": [\n  {\n   \"text\": \"At the gym (assessment finished)\",\n   \"slot\": \"now:activity\",\n   \"topics\": [\n    \"schedule\"\n   ],\n   \"valid_from\": null,\n   \"expires_at\": \"2026-10-29T21:30:00-04:00\",\n   \"evidence\": [\n    \"m1\"\n   ]\n  }\n ],\n \"supersede_situation_ids\": [],\n \"facts\": [],\n \"retire_fact_ids\": [],\n \"tasks\": []\n}"
 }

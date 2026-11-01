@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { checkDelivery, sensitiveTopicsIn } from '../../src/hub/guard.js';
 import { DEFAULT_SCOPES, canSee, type Scope } from '../../src/hub/scopes.js';
-import { AGENT_IDS, TOPICS, type AgentId } from '../../src/shared/types.js';
+import { AGENT_IDS, TOPICS, type BuiltinAgentId } from '../../src/shared/types.js';
 
-const scope = (agent: AgentId): Scope => ({ agent, ...DEFAULT_SCOPES[agent] });
+const scope = (agent: BuiltinAgentId): Scope => ({ agent, ...DEFAULT_SCOPES[agent] });
 
 describe('canSee: full agent × topic matrix for the v1 defaults', () => {
-  const allowed: Record<AgentId, string[]> = {
+  const allowed: Record<BuiltinAgentId, string[]> = {
     claude: [...TOPICS],
     chatgpt: [...TOPICS],
     gemini: [...TOPICS],

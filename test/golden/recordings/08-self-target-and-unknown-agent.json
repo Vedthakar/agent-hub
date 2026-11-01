@@ -3,6 +3,6 @@
   "source": "authored",
   "model": null,
   "recordedAt": "2026-10-30T00:00:00.000Z",
-  "promptSha256": "e31621a88120f77cfb25014c3f8ef204275479adc19e3ebe04a98ec066319e85",
-  "reply": "{\n \"summary\": \"Ved worked on the Agent Hub README with Claude.\",\n \"topics\": [\n  \"projects\"\n ],\n \"situation\": [],\n \"supersede_situation_ids\": [],\n \"facts\": [],\n \"retire_fact_ids\": [],\n \"tasks\": [\n  {\n   \"target_agent\": \"claude\",\n   \"payload\": \"Finish the README tomorrow.\",\n   \"rationale\": \"\",\n   \"topics\": [\n    \"projects\"\n   ],\n   \"author\": \"user\"\n  },\n  {\n   \"target_agent\": \"notion\",\n   \"payload\": \"File the README.\",\n   \"rationale\": \"\",\n   \"topics\": [\n    \"projects\"\n   ],\n   \"author\": \"user\"\n  }\n ]\n}"
+  "promptSha256": "029e9244a2b9dc8a34007d8c7fca696d8381508f0c591d004bdac1f36d29a472",
+  "reply": "{\n \"summary\": \"Ved worked on the Agent Hub README with Claude.\",\n \"topics\": [\n  \"projects\"\n ],\n \"situation\": [],\n \"supersede_situation_ids\": [],\n \"facts\": [],\n \"retire_fact_ids\": [],\n \"tasks\": [\n  {\n   \"target_agent\": \"claude\",\n   \"payload\": \"Finish the README tomorrow.\",\n   \"rationale\": \"\",\n   \"topics\": [\n    \"projects\"\n   ],\n   \"evidence\": []\n  },\n  {\n   \"target_agent\": \"notion\",\n   \"payload\": \"File the README.\",\n   \"rationale\": \"\",\n   \"topics\": [\n    \"projects\"\n   ],\n   \"evidence\": []\n  }\n ]\n}"
 }

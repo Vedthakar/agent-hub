@@ -1,10 +1,18 @@
 import type { AgentId } from '../shared/types.js';
 import { ADAPTERS } from './adapters/index.js';
-import { canSee } from './scopes.js';
+import { sensitiveTopicsIn } from './guard.js';
+import { canSee, deniedTopics, type Scope } from './scopes.js';
 import type { Store, SituationRow, FactRow, EventRow, TaskRow } from './store.js';
 import { formatLocal, startOfLocalDay } from './tz.js';
 
-const AUTHOR_LABEL = { user: 'you said', agent: 'agent suggested', hub: 'hub' } as const;
+const AUTHOR_LABEL = { user: 'you said', agent: 'agent-reported', hub: 'hub' } as const;
+
+/** Topic tags come from the model, so the text is also scanned: a mis-tagged item never reaches a denied agent. */
+function visible(scope: Scope | undefined, topics: string[], text: string): boolean {
+  if (!scope || !canSee(scope, topics)) return false;
+  const deny = deniedTopics(scope);
+  return !sensitiveTopicsIn(text).some((t) => deny.has(t));
+}
 
 export interface SituationView {
   agent: AgentId;
@@ -29,7 +37,7 @@ export async function situationFor(store: Store, agent: AgentId, now = new Date(
     agent,
     generatedAt: now.toISOString(),
     situation: live
-      .filter((s) => canSee(scope, s.topics))
+      .filter((s) => visible(scope, s.topics, s.text))
       .map((s) => ({
         id: s.id,
         text: s.text,
@@ -39,10 +47,10 @@ export async function situationFor(store: Store, agent: AgentId, now = new Date(
         expiresAt: s.expires_at ? new Date(s.expires_at).toISOString() : null,
       })),
     facts: facts
-      .filter((f) => canSee(scope, f.topics))
+      .filter((f) => visible(scope, f.topics, f.text))
       .map((f) => ({ id: f.id, kind: f.kind, text: f.text, from: name(f.source_agent), provenance: AUTHOR_LABEL[f.author] })),
     recentActivity: events
-      .filter((e) => e.agent !== agent && e.summary && canSee(scope, e.topics))
+      .filter((e) => e.agent !== agent && e.summary && visible(scope, e.topics, e.summary))
       .slice(0, 25)
       .map((e) => ({ at: new Date(e.occurred_at).toISOString(), agent: name(e.agent), summary: e.summary })),
     inboxCount: inbox.length,
@@ -84,7 +92,7 @@ export function renderSituation(view: SituationView, ownerName: string, tz: stri
 export async function compactContextFor(store: Store, agent: AgentId, limit = 5): Promise<string[]> {
   const scope = await store.scope(agent);
   const live = await store.liveSituation();
-  return live.filter((s) => canSee(scope, s.topics)).slice(0, limit).map((s) => s.text);
+  return live.filter((s) => visible(scope, s.topics, s.text)).slice(0, limit).map((s) => s.text);
 }
 
 /** The nightly digest emailed to Instinct when a debrief starts. */

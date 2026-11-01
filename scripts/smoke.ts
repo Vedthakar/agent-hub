@@ -19,7 +19,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { config as dotenv } from 'dotenv';
 import { loadConfig, type HubConfig } from '../src/hub/config.js';
-import { normalizeHandle } from '../src/daemon/chatdb.js';
+import { normalizeHandle } from '../src/shared/handles.js';
 import { createEmail, type EmailTransport } from '../src/hub/transports/email.js';
 import { createSms, type SmsTransport } from '../src/hub/transports/sms.js';
 

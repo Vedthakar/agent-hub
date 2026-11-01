@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import dotenv from 'dotenv';
-import { isAgentId, type AgentId } from '../shared/types.js';
+import { CUSTOM_AGENT_ID, isAgentId, type AgentId } from '../shared/types.js';
 
 dotenv.config({ quiet: true });
 
@@ -21,8 +21,9 @@ function agentMap(env: Env, name: string): Partial<Record<AgentId, string>> {
     if (idx < 0) continue;
     const agent = pair.slice(0, idx).trim();
     const value = pair.slice(idx + 1).trim();
-    if (!isAgentId(agent)) throw new Error(`${name}: unknown agent "${agent}"`);
-    out[agent] = value;
+    // Custom agents are registered after config loads, so their ids are accepted by shape.
+    if (!isAgentId(agent) && !CUSTOM_AGENT_ID.test(agent)) throw new Error(`${name}: unknown agent "${agent}"`);
+    out[agent as AgentId] = value;
   }
   return out;
 }
@@ -98,6 +99,10 @@ export interface HubConfig {
   };
   grokWebhookUrl: string | null;
   grokWebhookSecret: string | null;
+  /** Custom agents' optional nudge URL and the secret their signed /hooks/<agent> calls use. */
+  agentWebhooks: Partial<Record<AgentId, { url: string | null; secret: string | null }>>;
+  /** True when sessionSecret was generated for this process only (dashboard logins reset on restart). */
+  ephemeralSessionSecret: boolean;
 }
 
 export function loadConfig(env = process.env): HubConfig {
@@ -110,10 +115,8 @@ export function loadConfig(env = process.env): HubConfig {
   const approvalChannel = (env.APPROVAL_CHANNEL as HubConfig['approval']['channel'] | undefined) ??
     (env.APPROVAL_IMESSAGE_HANDLE ? 'imessage' : env.APPROVAL_TELEGRAM_BOT_TOKEN ? 'telegram' : env.TWILIO_ACCOUNT_SID ? 'sms' : 'none');
 
+  // Without HUB_OWNER_PASSWORD the owner creates one in the dashboard, unlocked by a one-time setup token.
   const ownerPassword = env.HUB_OWNER_PASSWORD ?? '';
-  if (!ownerPassword && env.NODE_ENV === 'production') {
-    throw new Error('HUB_OWNER_PASSWORD is required in production');
-  }
   if (env.NODE_ENV === 'production') {
     const placeholders = ['HUB_OWNER_PASSWORD', 'HUB_DAEMON_TOKEN', 'HUB_AGENT_TOKENS', 'HUB_SESSION_SECRET'].filter((k) => /change-me/i.test(env[k] ?? ''));
     if (placeholders.length) throw new Error(`Replace the change-me placeholder in ${placeholders.join(', ')} before running in production`);
@@ -128,7 +131,7 @@ export function loadConfig(env = process.env): HubConfig {
     ownerPassword,
     // Without an explicit secret, sessions are signed with a per-process random key (they reset on restart).
     sessionSecret: env.HUB_SESSION_SECRET || ownerPassword || randomBytes(32).toString('hex'),
-    timezone: env.HUB_TIMEZONE ?? 'America/New_York',
+    timezone: env.HUB_TIMEZONE?.trim() || 'America/New_York',
     daemonToken: env.HUB_DAEMON_TOKEN ?? '',
     agentTokens: agentMap(env, 'HUB_AGENT_TOKENS'),
     imessageHandles: agentMap(env, 'IMESSAGE_HANDLES'),
@@ -188,11 +191,13 @@ export function loadConfig(env = process.env): HubConfig {
     debriefPattern: new RegExp(env.DEBRIEF_PATTERN ?? '\\b(debrief|end of (the )?day|wrap(ping)? up (the |my )?day|nightly review)\\b', 'i'),
     stanley: {
       apiId: env.TELEGRAM_API_ID ? Number(env.TELEGRAM_API_ID) : null,
-      apiHash: env.TELEGRAM_API_HASH ?? null,
-      session: env.TELEGRAM_SESSION ?? null,
-      peer: env.STANLEY_TELEGRAM_PEER ?? null,
+      apiHash: env.TELEGRAM_API_HASH?.trim() || null,
+      session: env.TELEGRAM_SESSION?.trim() || null,
+      peer: env.STANLEY_TELEGRAM_PEER?.trim() || null,
     },
     grokWebhookUrl: env.GROK_WEBHOOK_URL ?? null,
     grokWebhookSecret: env.GROK_WEBHOOK_SECRET ?? null,
+    agentWebhooks: {},
+    ephemeralSessionSecret: !env.HUB_SESSION_SECRET && !ownerPassword,
   };
 }

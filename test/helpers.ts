@@ -1,7 +1,9 @@
+import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { loadConfig, type HubConfig } from '../src/hub/config.js';
-import { openDb } from '../src/hub/db.js';
+import { openDb, type Db } from '../src/hub/db.js';
+import { localSecretStore, type SecretStore } from '../src/hub/secrets.js';
 import { Hub } from '../src/hub/hub.js';
 import type { Llm } from '../src/hub/llm.js';
 import { createApp } from '../src/hub/server.js';
@@ -109,9 +111,9 @@ export async function makeHub(
   env: Record<string, string> = {},
   llm: Llm | null = fakeLlm(),
   overrides: Partial<Transports> = {},
-  opts: { backend?: Backend } = {},
+  opts: { backend?: Backend; secrets?: (db: Db) => SecretStore | null } = {},
 ) {
-  const cfg: HubConfig = loadConfig({
+  const fullEnv: Record<string, string> = {
     HUB_OWNER_NAME: 'Ved',
     HUB_OWNER_PASSWORD: 'hunter2',
     HUB_DAEMON_TOKEN: 'daemon-token',
@@ -124,7 +126,8 @@ export async function makeHub(
     EMAIL_FROM: 'ved@example.com',
     INSTINCT_EMAIL,
     ...env,
-  });
+  };
+  const cfg: HubConfig = loadConfig(fullEnv);
   const which = opts.backend ?? backend();
   const fresh = which === 'supabase' ? await freshDatabase() : null;
   const raw = await openDb({ databaseUrl: fresh?.url ?? null, pgliteDir: null, maxConnections: 4 });
@@ -141,7 +144,9 @@ export async function makeHub(
   const telegram = fakeTelegram();
   const sms = fakeSms();
   const transports: Transports = { ...createTransports(cfg, store), email, telegramUser: telegram, sms, telegramBot: null, imap: null, ...overrides };
-  const hub = new Hub(store, cfg, transports, llm);
+  const secrets = opts.secrets ? opts.secrets(raw) : localSecretStore(raw, randomBytes(32));
+  const hub = new Hub(store, cfg, transports, llm, { secrets, env: fullEnv });
+  await hub.connections.load();
   return { hub, store, cfg, db, llm: llm as FakeLlm, email, telegram, sms, transports, backend: which, databaseUrl: fresh?.url ?? null };
 }
 

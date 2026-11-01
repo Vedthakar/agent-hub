@@ -1,6 +1,6 @@
 import type { HubConfig } from '../config.js';
 import { handleBounces } from '../bounces.js';
-import { canSee } from '../scopes.js';
+import { canSee, deniedTopics } from '../scopes.js';
 import { sensitiveTopicsIn } from '../guard.js';
 import type { Store, TaskRow } from '../store.js';
 import { isBounce } from '../transports/imap.js';
@@ -41,7 +41,7 @@ export function composeBoardyBrief(cfg: HubConfig, task: TaskRow, standing: stri
 /** Professional facts/situation Boardy may see, with anything sensitive removed. */
 async function standingFor(store: Store): Promise<string[]> {
   const scope = await store.scope('boardy');
-  const denied = new Set(scope?.deny_topics ?? []);
+  const denied = scope ? deniedTopics(scope) : new Set<string>();
   const items = [...(await store.liveSituation()), ...(await store.activeFacts())]
     .filter((i) => canSee(scope, i.topics))
     .map((i) => i.text)

@@ -224,6 +224,30 @@ CREATE TABLE IF NOT EXISTS routes (
   PRIMARY KEY (origin_agent, target_agent)
 );
 
+-- ---------- v1.2: connections UI ----------
+
+-- Credentials entered in the dashboard when the secret store is the local one: AES-256-GCM ciphertext
+-- only, keyed outside the database. (The Keychain and Supabase Vault backends don't use this table.)
+CREATE TABLE IF NOT EXISTS secrets (
+  name        TEXT PRIMARY KEY,
+  value       TEXT NOT NULL,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Work the dashboard asks the Mac daemon to do (list recent threads, toggle keep-awake, open Settings).
+CREATE TABLE IF NOT EXISTS daemon_jobs (
+  id          BIGSERIAL PRIMARY KEY,
+  kind        TEXT NOT NULL CHECK (kind IN ('list-threads', 'keep-awake', 'open-settings')),
+  args        JSONB NOT NULL DEFAULT '{}',
+  status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'claimed', 'done', 'failed')),
+  result      JSONB,
+  error       TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  claimed_at  TIMESTAMPTZ,
+  done_at     TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS daemon_jobs_pending ON daemon_jobs (status, created_at);
+
 -- ---------- Row-level security ----------
 -- The hub connects as the table owner and bypasses RLS. Supabase exposes the public schema to the
 -- `anon` / `authenticated` roles through PostgREST, so every table gets RLS with no policies (deny all)
@@ -232,7 +256,7 @@ DO $$
 DECLARE t TEXT;
 BEGIN
   FOREACH t IN ARRAY ARRAY['raw_messages','events','situation','facts','tasks','scopes','outbox','agent_status',
-    'audit','settings','oauth_clients','oauth_codes','oauth_tokens','dead_letters','inbound_commands','routes'] LOOP
+    'audit','settings','oauth_clients','oauth_codes','oauth_tokens','dead_letters','inbound_commands','routes','secrets','daemon_jobs'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
       EXECUTE format('REVOKE ALL ON TABLE %I FROM anon', t);

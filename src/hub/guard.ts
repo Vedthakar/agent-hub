@@ -1,4 +1,4 @@
-import { canSee, type Scope } from './scopes.js';
+import { canSee, deniedTopics, type Scope } from './scopes.js';
 
 /**
  * Deterministic last line of defence, applied when a task is proposed AND again at delivery time.
@@ -20,8 +20,19 @@ const SENSITIVE_PATTERNS: Record<'school' | 'health' | 'finances' | 'personal', 
 
 export type SensitiveTopic = keyof typeof SENSITIVE_PATTERNS;
 
+/** Undo cheap obfuscation before scanning: compatibility forms, accents, invisible characters, s-p-a-c-e-d letters. */
+export function normalizeForScan(text: string): string {
+  return text
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g, '')
+    .replace(/\b(?:\p{L}[._*-]){2,}\p{L}\b/gu, (m) => m.replace(/[._*-]/g, ''))
+    .replace(/\b(?:\p{L} ){2,}\p{L}\b/gu, (m) => m.replace(/ /g, ''));
+}
+
 export function sensitiveTopicsIn(text: string): SensitiveTopic[] {
-  return (Object.keys(SENSITIVE_PATTERNS) as SensitiveTopic[]).filter((t) => SENSITIVE_PATTERNS[t].test(text));
+  const variants = [text, normalizeForScan(text)];
+  return (Object.keys(SENSITIVE_PATTERNS) as SensitiveTopic[]).filter((t) => variants.some((v) => SENSITIVE_PATTERNS[t].test(v)));
 }
 
 export interface GuardResult {
@@ -37,7 +48,7 @@ export function checkDelivery(scope: Scope | undefined, agentName: string, task:
   if (!canSee(scope, task.topics)) {
     return { ok: false, reason: `outside ${agentName}'s scope (topics: ${task.topics.join(', ') || 'general'})`, context: [] };
   }
-  const denied = new Set(scope.deny_topics);
+  const denied = deniedTopics(scope);
   const leaked = sensitiveTopicsIn(task.payload).filter((t) => denied.has(t));
   if (leaked.length) {
     return { ok: false, reason: `payload mentions ${leaked.join(', ')}, which ${agentName} may never receive`, context: [] };

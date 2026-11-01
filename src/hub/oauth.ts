@@ -5,9 +5,10 @@ import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/serv
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { OAuthClientInformationFull, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { InvalidGrantError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
-import { isAgentId, type AgentId } from '../shared/types.js';
+import { agentIds, isAgentId, type AgentId } from '../shared/types.js';
 import type { HubConfig } from './config.js';
 import type { Store } from './store.js';
+import { toJson } from './db.js';
 import { ADAPTERS } from './adapters/index.js';
 import { escapeHtml } from './html.js';
 import { safeEqual } from './crypto.js';
@@ -15,7 +16,13 @@ import { safeEqual } from './crypto.js';
 const ACCESS_TTL_S = 7 * 24 * 3600;
 const REFRESH_TTL_S = 180 * 24 * 3600;
 const CODE_TTL_MS = 5 * 60_000;
-const MCP_AGENTS: AgentId[] = ['claude', 'chatgpt', 'gemini', 'grok'];
+/** Agents that connect over MCP: Claude, ChatGPT, Gemini, Grok Bot and any custom agent. */
+const mcpAgents = (): AgentId[] => agentIds().filter((a) => ADAPTERS[a]?.capabilities.readVia === 'mcp');
+
+export interface OwnerAuth {
+  hasOwnerPassword(): boolean;
+  verifyOwnerPassword(password: string): Promise<boolean>;
+}
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 const newSecret = () => randomBytes(32).toString('base64url');
@@ -38,6 +45,7 @@ export class HubOAuthProvider implements OAuthServerProvider {
   constructor(
     private store: Store,
     private cfg: HubConfig,
+    private owner: OwnerAuth,
   ) {}
 
   get clientsStore(): OAuthRegisteredClientsStore {
@@ -48,7 +56,7 @@ export class HubOAuthProvider implements OAuthServerProvider {
       },
       registerClient: async (client) => {
         const full = client as OAuthClientInformationFull;
-        await this.store.db.query('INSERT INTO oauth_clients (client_id, info) VALUES ($1, $2::text::jsonb)', [full.client_id, JSON.stringify(full)]);
+        await this.store.db.query('INSERT INTO oauth_clients (client_id, info) VALUES ($1, $2::text::jsonb)', [full.client_id, toJson(full)]);
         await this.store.audit('oauth', 'client.registered', { client_id: full.client_id, name: full.client_name ?? null });
         return full;
       },
@@ -75,18 +83,18 @@ export class HubOAuthProvider implements OAuthServerProvider {
       res.redirect(302, redirect.toString());
       return;
     }
-    if (!this.cfg.ownerPassword || !safeEqual(b.password ?? '', this.cfg.ownerPassword)) {
+    if (!this.owner.hasOwnerPassword() || !(await this.owner.verifyOwnerPassword(String(b.password ?? '')))) {
       res.status(401).type('html').send(
         consentPage({
           client,
           params: { codeChallenge: b.code_challenge, redirectUri: b.redirect_uri, state: b.state, resource: b.resource ? new URL(b.resource) : undefined },
           selected: isAgentId(b.agent) ? b.agent : 'claude',
-          error: this.cfg.ownerPassword ? 'Wrong password.' : 'Set HUB_OWNER_PASSWORD on the server first.',
+          error: this.owner.hasOwnerPassword() ? 'Wrong password.' : 'Finish setting up the hub (create your password) first.',
         }),
       );
       return;
     }
-    if (!isAgentId(b.agent) || !MCP_AGENTS.includes(b.agent)) {
+    if (!isAgentId(b.agent) || !mcpAgents().includes(b.agent)) {
       res.status(400).send('Pick an agent');
       return;
     }
@@ -130,7 +138,18 @@ export class HubOAuthProvider implements OAuthServerProvider {
        RETURNING agent, resource`,
       [sha256(refreshToken), client.client_id],
     );
-    if (!rows[0]) throw new InvalidGrantError('Invalid refresh token');
+    if (!rows[0]) {
+      // A rotated refresh token coming back means two parties hold it: revoke the whole connection.
+      const reused = await this.store.db.query(
+        `SELECT 1 FROM oauth_tokens WHERE token_hash = $1 AND kind = 'refresh' AND client_id = $2 AND revoked`,
+        [sha256(refreshToken), client.client_id],
+      );
+      if (reused.length) {
+        await this.store.db.query('UPDATE oauth_tokens SET revoked = true WHERE client_id = $1 AND NOT revoked', [client.client_id]);
+        await this.store.audit('oauth', 'refresh.reused', { client_id: client.client_id });
+      }
+      throw new InvalidGrantError('Invalid refresh token');
+    }
     return this.issueTokens(client.client_id, rows[0].agent, rows[0].resource);
   }
 
@@ -176,7 +195,7 @@ function consentPage(opts: { client: OAuthClientInformationFull; params: Authori
   const { client, params } = opts;
   const hidden = (name: string, value: string | undefined) =>
     value === undefined ? '' : `<input type="hidden" name="${name}" value="${escapeHtml(value)}">`;
-  const options = MCP_AGENTS.map(
+  const options = mcpAgents().map(
     (a) => `<option value="${a}"${a === opts.selected ? ' selected' : ''}>${escapeHtml(ADAPTERS[a].name)}</option>`,
   ).join('');
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">

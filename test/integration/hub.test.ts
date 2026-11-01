@@ -4,6 +4,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { situationFor } from '../../src/hub/context.js';
 import { HANDLES, INSTINCT_EMAIL, makeHub, minutesFromNow, msg, serve } from '../helpers.js';
+import { cite } from '../support/cite.js';
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -48,13 +49,15 @@ describe('cross-agent trigger: Instinct → Grok Bot with text approval', () => 
     expect(await hub.collectBursts(minutesFromNow(11))).toBe(1);
 
     llm.next.push((user) => {
-      expect(user).toContain('<transcript>');
+      expect(user).toMatch(/<untrusted-[0-9a-f]{16} kind="transcript">/);
       expect(user).toContain("Ved: Let's pause open source");
+      const evidence = cite(user, "Let's pause open source");
+      expect(evidence).toEqual(['m1']);
       return {
         summary: 'Ved decided to pause open-source work for a week to focus on an assessment.',
         topics: ['open_source', 'work'],
-        situation: [{ text: 'Open-source work paused for a week', slot: 'pause:open_source', topics: ['open_source'], expires_at: inDays(7), author: 'user' }],
-        tasks: [{ target_agent: 'grok', payload: 'Pause all open-source work for 1 week.', rationale: 'Ved decided this with Instinct', topics: ['open_source'], author: 'user' }],
+        situation: [{ text: 'Open-source work paused for a week', slot: 'pause:open_source', topics: ['open_source'], expires_at: inDays(7), evidence }],
+        tasks: [{ target_agent: 'grok', payload: 'Pause all open-source work for 1 week.', rationale: 'Ved decided this with Instinct', topics: ['open_source'], evidence }],
       };
     });
     expect(await hub.routePending()).toBe(1);

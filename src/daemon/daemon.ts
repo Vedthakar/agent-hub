@@ -3,8 +3,9 @@ import path from 'node:path';
 import type { DaemonConfig, DaemonMessage, OutboxItem } from '../shared/types.js';
 import type { Logger } from '../shared/log.js';
 import { ChatDb, normalizeHandle } from './chatdb.js';
+import type { MacOps } from './mac.js';
 
-export const DAEMON_VERSION = '0.2.0';
+export const DAEMON_VERSION = '0.3.0';
 
 export interface DaemonState {
   lastRowId: number;
@@ -22,12 +23,31 @@ export class HubHttpError extends Error {
   }
 }
 
+export interface HeartbeatBody {
+  lastRowId: number;
+  error: string | null;
+  version: string;
+  resumedAfterMs?: number;
+  fullDiskAccess?: boolean | null;
+  keepAwake?: boolean | null;
+  nodePath?: string;
+}
+
+export interface DaemonJob {
+  id: number;
+  kind: 'list-threads' | 'keep-awake' | 'open-settings';
+  args: Record<string, unknown>;
+}
+
 export interface HubClient {
   config(): Promise<DaemonConfig>;
   ingest(messages: DaemonMessage[]): Promise<unknown>;
   outbox(): Promise<OutboxItem[]>;
   ack(id: number, ok: boolean, error?: string): Promise<void>;
-  heartbeat(body: { lastRowId: number; error: string | null; version: string; resumedAfterMs?: number }): Promise<void>;
+  heartbeat(body: HeartbeatBody): Promise<void>;
+  /** Work queued from the dashboard. Optional so older hubs (and tests) without it still work. */
+  jobs?(): Promise<DaemonJob[]>;
+  finishJob?(id: number, ok: boolean, result?: unknown, error?: string): Promise<void>;
 }
 
 export function httpHubClient(baseUrl: string, token: string, timeoutMs = 20_000): HubClient {
@@ -53,7 +73,24 @@ export function httpHubClient(baseUrl: string, token: string, timeoutMs = 20_000
     heartbeat: async (body) => {
       await call('POST', '/daemon/heartbeat', body);
     },
+    jobs: async () => (await call<{ jobs: DaemonJob[] }>('GET', '/daemon/jobs')).jobs,
+    finishJob: async (id, ok, result, error) => {
+      await call('POST', `/daemon/jobs/${id}`, { ok, result, error });
+    },
   };
+}
+
+/** Trades a one-time pairing code from the dashboard for this daemon's own token. */
+export async function pairWithHub(baseUrl: string, code: string): Promise<string> {
+  const res = await fetch(`${baseUrl.replace(/\/$/, '')}/daemon/pair`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ code }),
+    signal: AbortSignal.timeout(20_000),
+  });
+  const body = (await res.json().catch(() => ({}))) as { token?: string; error?: string };
+  if (!res.ok || !body.token) throw new Error(body.error ?? `pairing failed (${res.status})`);
+  return body.token;
 }
 
 export interface StateStore {
@@ -123,6 +160,10 @@ export interface DaemonOptions {
   sleepGapFactor?: number;
   now?: () => number;
   openDb?: (path: string, busyTimeoutMs: number) => ChatDb;
+  /** Keep-awake and System Settings; omitted off macOS and in most tests. */
+  mac?: MacOps;
+  /** The binary that needs Full Disk Access (process.execPath). */
+  nodePath?: string;
 }
 
 export interface CycleReport {
@@ -152,6 +193,10 @@ export class Daemon {
   private lastCycleAt: number | null = null;
   lastError: string | null = null;
   backoffMs = 0;
+  /** null until the first attempt to open chat.db. */
+  fullDiskAccess: boolean | null = null;
+  private keepAwake: boolean | null = null;
+  private reported: { fda: boolean | null; awake: boolean | null } = { fda: null, awake: null };
 
   constructor(private o: DaemonOptions) {}
 
@@ -165,8 +210,9 @@ export class Daemon {
       return this.o.openDb ? this.o.openDb(this.o.chatDbPath, busy) : new ChatDb(this.o.chatDbPath, { busyTimeoutMs: busy });
     } catch (err) {
       if (NO_FDA.test(String(err)) || /unable to open/i.test(String(err))) {
+        this.fullDiskAccess = false;
         throw new Error(
-          `Cannot open ${this.o.chatDbPath}. Grant Full Disk Access to ${process.execPath} in System Settings → Privacy & Security → Full Disk Access, then restart the daemon.`,
+          `Cannot open ${this.o.chatDbPath}. Grant Full Disk Access to ${this.o.nodePath ?? process.execPath} in System Settings → Privacy & Security → Full Disk Access, then restart the daemon.`,
         );
       }
       throw err;
@@ -202,6 +248,7 @@ export class Daemon {
 
     try {
       this.db ??= this.open();
+      this.fullDiskAccess = true;
       this.state ??= await this.o.state.load();
       if (!this.state) {
         const hours = this.o.backfillHours ?? 0;
@@ -228,26 +275,74 @@ export class Daemon {
       const msg = err instanceof Error ? err.message : String(err);
       this.lastError = msg;
       report.error = msg;
-      this.backoffMs = Math.min(this.backoffMs ? this.backoffMs * 2 : 5_000, 5 * 60_000);
+      // Waiting on Full Disk Access is polled at a steady 5s so the dashboard sees the grant quickly.
+      this.backoffMs = this.fullDiskAccess === false ? 5_000 : Math.min(this.backoffMs ? this.backoffMs * 2 : 5_000, 5 * 60_000);
       this.o.log.warn('daemon.cycle_failed', { error: msg, backoffMs: this.backoffMs });
       // Messages.app restarting, a WAL checkpoint or a missing permission: reopen next time.
       if (RECOVERABLE_DB.test(msg) || /Full Disk Access/.test(msg)) this.closeDb();
     }
 
-    if (now - this.lastHeartbeat > 30_000 || report.resumedAfterMs !== null) {
+    // Dashboard jobs don't need chat.db (except listing threads), so they run even while it can't be opened.
+    await this.runJobs().catch((err) => this.o.log.warn('daemon.jobs_failed', { error: String(err) }));
+
+    const due = now - this.lastHeartbeat > 30_000;
+    if (due && this.o.mac) this.keepAwake = await this.o.mac.keepAwake().catch(() => null);
+    const changed = this.fullDiskAccess !== this.reported.fda || this.keepAwake !== this.reported.awake;
+    if (due || changed || report.resumedAfterMs !== null) {
       try {
         await this.o.hub.heartbeat({
           lastRowId: this.state?.lastRowId ?? 0,
           error: this.lastError,
           version: DAEMON_VERSION,
+          fullDiskAccess: this.fullDiskAccess,
+          keepAwake: this.keepAwake,
+          ...(this.o.nodePath ? { nodePath: this.o.nodePath } : {}),
           ...(report.resumedAfterMs !== null ? { resumedAfterMs: report.resumedAfterMs } : {}),
         });
         this.lastHeartbeat = now;
+        this.reported = { fda: this.fullDiskAccess, awake: this.keepAwake };
       } catch {
         // Hub unreachable; the next cycle retries.
       }
     }
     return report;
+  }
+
+  private async runJobs() {
+    const hub = this.o.hub;
+    if (!hub.jobs || !hub.finishJob) return;
+    for (const job of await hub.jobs()) {
+      try {
+        const result = await this.runJob(job);
+        await hub.finishJob(job.id, true, result);
+      } catch (err) {
+        await hub.finishJob(job.id, false, undefined, (err instanceof Error ? err.message : String(err)).slice(0, 500)).catch(() => undefined);
+      }
+    }
+  }
+
+  private async runJob(job: DaemonJob): Promise<unknown> {
+    switch (job.kind) {
+      case 'list-threads': {
+        this.db ??= this.open();
+        this.fullDiskAccess = true;
+        const days = Math.min(Math.max(Number(job.args.days ?? 30), 1), 90);
+        return { threads: this.db.recentThreads(new Date(this.now() - days * 86_400_000), 30) };
+      }
+      case 'keep-awake': {
+        if (!this.o.mac) throw new Error('keep-awake is only available on macOS');
+        await this.o.mac.setKeepAwake(job.args.on === true);
+        this.keepAwake = await this.o.mac.keepAwake();
+        return { keepAwake: this.keepAwake };
+      }
+      case 'open-settings': {
+        if (!this.o.mac) throw new Error('only available on macOS');
+        await this.o.mac.openFullDiskAccess();
+        return { opened: true };
+      }
+      default:
+        throw new Error(`unknown job ${(job as DaemonJob).kind}`);
+    }
   }
 
   /** Drains the backlog page by page, in ROWID order. Nothing is lost if the hub is down: the checkpoint stays put. */

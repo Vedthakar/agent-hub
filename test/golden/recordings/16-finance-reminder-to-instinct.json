@@ -3,6 +3,6 @@
   "source": "authored",
   "model": null,
   "recordedAt": "2026-10-30T00:00:00.000Z",
-  "promptSha256": "767253364bfa9cab5304b875a582682d991237faa766dedae24174b5df449287",
-  "reply": "{\n \"summary\": \"Ved noted his rent is due Sunday and asked for a reminder on Saturday morning.\",\n \"topics\": [\n  \"finances\",\n  \"schedule\"\n ],\n \"situation\": [],\n \"supersede_situation_ids\": [],\n \"facts\": [],\n \"retire_fact_ids\": [],\n \"tasks\": [\n  {\n   \"target_agent\": \"instinct\",\n   \"payload\": \"Remind Ved on Saturday morning (Oct 31) that his rent is due Sunday.\",\n   \"rationale\": \"\",\n   \"topics\": [\n    \"finances\",\n    \"schedule\"\n   ],\n   \"author\": \"user\"\n  }\n ]\n}"
+  "promptSha256": "89307e89ddc6596daa6eb5b871b7df2ed125ee7d3206db45e2e80bef0d1b0901",
+  "reply": "{\n \"summary\": \"Ved noted his rent is due Sunday and asked for a reminder on Saturday morning.\",\n \"topics\": [\n  \"finances\",\n  \"schedule\"\n ],\n \"situation\": [],\n \"supersede_situation_ids\": [],\n \"facts\": [],\n \"retire_fact_ids\": [],\n \"tasks\": [\n  {\n   \"target_agent\": \"instinct\",\n   \"payload\": \"Remind Ved on Saturday morning (Oct 31) that his rent is due Sunday.\",\n   \"rationale\": \"\",\n   \"topics\": [\n    \"finances\",\n    \"schedule\"\n   ],\n   \"evidence\": []\n  }\n ]\n}"
 }

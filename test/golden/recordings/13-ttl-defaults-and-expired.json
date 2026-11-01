@@ -3,6 +3,6 @@
   "source": "authored",
   "model": null,
   "recordedAt": "2026-10-30T00:00:00.000Z",
-  "promptSha256": "b8145acaec780f562e974094d51eaefdba57102b61424b1232d79658994ddf14",
-  "reply": "{\n \"summary\": \"Ved had lunch with Sam and is working on the pitch deck tonight.\",\n \"topics\": [\n  \"work\"\n ],\n \"situation\": [\n  {\n   \"text\": \"Lunch with Sam\",\n   \"slot\": null,\n   \"topics\": [\n    \"personal\"\n   ],\n   \"valid_from\": null,\n   \"expires_at\": \"2026-10-29T14:00:00-04:00\",\n   \"author\": \"user\"\n  },\n  {\n   \"text\": \"Working on the pitch deck tonight\",\n   \"slot\": \"now:activity\",\n   \"topics\": [\n    \"work\"\n   ],\n   \"valid_from\": null,\n   \"expires_at\": null,\n   \"author\": \"user\"\n  }\n ],\n \"supersede_situation_ids\": [],\n \"facts\": [],\n \"retire_fact_ids\": [],\n \"tasks\": []\n}"
+  "promptSha256": "1723173aedf4ae06db83491b1b3b24ea256ee502eb9216f044b9c71c2fc5ef80",
+  "reply": "{\n \"summary\": \"Ved had lunch with Sam and is working on the pitch deck tonight.\",\n \"topics\": [\n  \"work\"\n ],\n \"situation\": [\n  {\n   \"text\": \"Lunch with Sam\",\n   \"slot\": null,\n   \"topics\": [\n    \"personal\"\n   ],\n   \"valid_from\": null,\n   \"expires_at\": \"2026-10-29T14:00:00-04:00\",\n   \"evidence\": []\n  },\n  {\n   \"text\": \"Working on the pitch deck tonight\",\n   \"slot\": \"now:activity\",\n   \"topics\": [\n    \"work\"\n   ],\n   \"valid_from\": null,\n   \"expires_at\": null,\n   \"evidence\": []\n  }\n ],\n \"supersede_situation_ids\": [],\n \"facts\": [],\n \"retire_fact_ids\": [],\n \"tasks\": []\n}"
 }

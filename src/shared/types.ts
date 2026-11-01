@@ -1,8 +1,30 @@
+/** The built-in agents. Custom agents added from the dashboard get `custom-<slug>` ids. */
 export const AGENT_IDS = ['claude', 'chatgpt', 'gemini', 'instinct', 'stanley', 'boardy', 'grok'] as const;
-export type AgentId = (typeof AGENT_IDS)[number];
+export type BuiltinAgentId = (typeof AGENT_IDS)[number];
+export type CustomAgentId = `custom-${string}`;
+export type AgentId = BuiltinAgentId | CustomAgentId;
+
+export const CUSTOM_AGENT_ID = /^custom-[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
+
+const customIds = new Set<CustomAgentId>();
+
+/** Replaces the registered custom agents (loaded from the hub's settings). */
+export function setCustomAgentIds(ids: readonly string[]): void {
+  customIds.clear();
+  for (const id of ids) if (CUSTOM_AGENT_ID.test(id)) customIds.add(id as CustomAgentId);
+}
+
+/** Every agent the hub knows about: built-ins first, then custom agents in creation order. */
+export function agentIds(): AgentId[] {
+  return [...AGENT_IDS, ...customIds];
+}
+
+export function isBuiltinAgent(value: unknown): value is BuiltinAgentId {
+  return typeof value === 'string' && (AGENT_IDS as readonly string[]).includes(value);
+}
 
 export function isAgentId(value: unknown): value is AgentId {
-  return typeof value === 'string' && (AGENT_IDS as readonly string[]).includes(value);
+  return isBuiltinAgent(value) || (typeof value === 'string' && customIds.has(value as CustomAgentId));
 }
 
 export type Author = 'user' | 'agent' | 'hub';

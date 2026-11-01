@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import type { DaemonMessage } from '../shared/types.js';
 import { cleanMessageText, decodeAttributedBody } from './attributedBody.js';
+import { normalizeHandle } from '../shared/handles.js';
 
 const APPLE_EPOCH_OFFSET_S = 978_307_200;
 
@@ -11,12 +12,7 @@ export function appleDateToIso(value: number | bigint): string {
   return new Date(ms + APPLE_EPOCH_OFFSET_S * 1000).toISOString();
 }
 
-export function normalizeHandle(handle: string): string {
-  const h = handle.trim().toLowerCase();
-  if (h.includes('@')) return h;
-  const digits = h.replace(/\D/g, '');
-  return digits.length > 10 ? digits.slice(-10) : digits;
-}
+export { normalizeHandle } from '../shared/handles.js';
 
 interface Row {
   rowid: bigint;
@@ -108,7 +104,39 @@ export class ChatDb {
     return { messages, scannedTo };
   }
 
+  /**
+   * Recent 1:1 conversations, newest first, for the dashboard's "which thread is Instinct?" picker.
+   * Handles, counts and times only: no message text leaves the Mac for this.
+   */
+  recentThreads(since: Date, limit = 30): RecentThread[] {
+    const stmt = this.db.prepare(
+      `SELECT c.chat_identifier AS handle, MAX(m.date) AS last, COUNT(*) AS n,
+              SUM(CASE WHEN m.is_from_me = 1 THEN 0 ELSE 1 END) AS inbound, MAX(m.service) AS service
+       FROM message m
+       JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+       JOIN chat c ON c.ROWID = cmj.chat_id
+       WHERE c.style = 45 AND m.date >= ? AND COALESCE(m.associated_message_type, 0) = 0
+       GROUP BY c.ROWID
+       ORDER BY last DESC
+       LIMIT ?`,
+    );
+    stmt.setReadBigInts(true);
+    const appleNs = BigInt(Math.floor(since.getTime() / 1000 - APPLE_EPOCH_OFFSET_S)) * 1_000_000_000n;
+    const rows = stmt.all(appleNs, limit) as unknown as { handle: string | null; last: bigint; n: bigint; inbound: bigint; service: string | null }[];
+    return rows
+      .filter((r) => r.handle)
+      .map((r) => ({ handle: r.handle!, lastAt: appleDateToIso(r.last), messages: Number(r.n), fromThem: Number(r.inbound), service: r.service ?? 'iMessage' }));
+  }
+
   close(): void {
     this.db.close();
   }
+}
+
+export interface RecentThread {
+  handle: string;
+  lastAt: string;
+  messages: number;
+  fromThem: number;
+  service: string;
 }
