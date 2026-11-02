@@ -18,7 +18,11 @@ export class LlmError extends Error {
   }
 }
 
+export const OLLAMA_URL = 'http://localhost:11434';
+
 export function createLlm(cfg: HubConfig['router']): Llm | null {
+  // Ollama runs on this machine: free, no key. It speaks the OpenAI chat API.
+  if (cfg.provider === 'ollama') return openai(null, cfg.model, cfg.baseUrl ?? `${OLLAMA_URL}/v1`, Math.max(cfg.timeoutMs, 180_000));
   if (cfg.provider === 'none' || !cfg.apiKey) return null;
   if (cfg.provider === 'anthropic') return anthropic(cfg.apiKey, cfg.model, cfg.baseUrl ?? 'https://api.anthropic.com', cfg.timeoutMs);
   return openai(cfg.apiKey, cfg.model, cfg.baseUrl ?? 'https://api.openai.com/v1', cfg.timeoutMs);
@@ -72,12 +76,12 @@ function anthropic(apiKey: string, model: string, baseUrl: string, timeoutMs: nu
   };
 }
 
-function openai(apiKey: string, model: string, baseUrl: string, timeoutMs: number): Llm {
+function openai(apiKey: string | null, model: string, baseUrl: string, timeoutMs: number): Llm {
   return {
     async complete(system, user) {
       const body = (await post(
         `${baseUrl}/chat/completions`,
-        { authorization: `Bearer ${apiKey}` },
+        apiKey ? { authorization: `Bearer ${apiKey}` } : {},
         {
           model,
           response_format: { type: 'json_object' },
@@ -91,6 +95,24 @@ function openai(apiKey: string, model: string, baseUrl: string, timeoutMs: numbe
       return body.choices?.[0]?.message.content ?? '';
     },
   };
+}
+
+/**
+ * Looks for a local Ollama with at least one model pulled. Returns the model to use, or null.
+ * Prefers `wanted`, then models known to follow JSON instructions well, then whatever is installed.
+ */
+export async function detectOllama(wanted: string | null, baseUrl = OLLAMA_URL): Promise<string | null> {
+  try {
+    const res = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(1500) });
+    if (!res.ok) return null;
+    const names = (((await res.json()) as { models?: { name: string }[] }).models ?? []).map((m) => m.name);
+    if (!names.length) return null;
+    const has = (n: string) => names.find((x) => x === n || x === `${n}:latest` || x.startsWith(`${n}:`));
+    for (const n of [wanted, 'qwen2.5', 'llama3.1', 'llama3.2', 'gemma3', 'mistral']) if (n && has(n)) return has(n)!;
+    return names[0];
+  } catch {
+    return null;
+  }
 }
 
 /** Pulls the first JSON object out of a model reply (tolerates code fences / prose around it). */

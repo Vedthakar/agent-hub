@@ -4,7 +4,7 @@ import { log } from '../shared/log.js';
 import { CUSTOM_AGENT_ID, isAgentId, type AgentId, type CustomAgentId } from '../shared/types.js';
 import { registerCustomAgents } from './adapters/index.js';
 import type { CustomAgentDef } from './adapters/custom.js';
-import type { HubConfig } from './config.js';
+import { defaultModel, type HubConfig } from './config.js';
 import { safeEqual } from './crypto.js';
 import { customDefaultScope } from './scopes.js';
 import type { SecretStore } from './secrets.js';
@@ -44,8 +44,8 @@ const FIELDS: Record<string, Field> = {
     }),
   },
   'router.provider': field('ROUTER_PROVIDER', (c, v) => {
-    if (v !== 'anthropic' && v !== 'openai') return;
-    if (c.router.provider !== v) c.router.model = v === 'openai' ? 'gpt-4.1' : 'claude-sonnet-4-5';
+    if (v !== 'anthropic' && v !== 'openai' && v !== 'ollama') return;
+    if (c.router.provider !== v) c.router.model = defaultModel(v);
     c.router.provider = v;
   }),
   'router.key': {
@@ -54,8 +54,11 @@ const FIELDS: Record<string, Field> = {
     envSet: (e) => has(e, 'ANTHROPIC_API_KEY') || has(e, 'OPENAI_API_KEY'),
     write: (c, v) => {
       c.router.apiKey = v;
-      if (c.router.provider === 'none') c.router.provider = v.startsWith('sk-ant-') ? 'anthropic' : 'openai';
-      if (!c.router.model) c.router.model = c.router.provider === 'openai' ? 'gpt-4.1' : 'claude-sonnet-4-5';
+      if (c.router.provider === 'none' || c.router.provider === 'ollama') {
+        c.router.provider = v.startsWith('sk-ant-') ? 'anthropic' : 'openai';
+        c.router.model = defaultModel(c.router.provider);
+      }
+      if (!c.router.model) c.router.model = defaultModel(c.router.provider);
     },
   },
   'email.provider': field(null, () => undefined),

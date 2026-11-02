@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { LlmError, backoffMs, createLlm } from '../../src/hub/llm.js';
+import { LlmError, backoffMs, createLlm, detectOllama } from '../../src/hub/llm.js';
 
 const cfg = (provider: 'anthropic' | 'openai', timeoutMs = 1000) => ({
   provider,
@@ -107,6 +107,31 @@ describe('LLM client', () => {
     mockFetch(async () => Response.json({}));
     expect(await createLlm(cfg('openai'))!.complete('s', 'u')).toBe('');
     expect(await createLlm(cfg('anthropic'))!.complete('s', 'u')).toBe('');
+  });
+});
+
+describe('free local model (Ollama)', () => {
+  it('needs no key and sends no Authorization header', async () => {
+    const fetch = mockFetch(async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] })));
+    const llm = createLlm({ ...cfg('openai'), provider: 'ollama', apiKey: null, baseUrl: null, model: 'llama3.2' });
+    expect(llm).not.toBeNull();
+    expect(await llm!.complete('sys', 'user')).toBe('{"ok":true}');
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('http://localhost:11434/v1/chat/completions');
+    expect(Object.keys(init.headers as Record<string, string>).map((k) => k.toLowerCase())).not.toContain('authorization');
+    expect(JSON.parse(String(init.body)).model).toBe('llama3.2');
+  });
+
+  it('detects an installed model, prefers the requested one, and returns null when Ollama is absent or empty', async () => {
+    mockFetch(async () => new Response(JSON.stringify({ models: [{ name: 'gemma3:4b' }, { name: 'llama3.2:latest' }] })));
+    expect(await detectOllama(null)).toBe('llama3.2:latest');
+    expect(await detectOllama('gemma3')).toBe('gemma3:4b');
+    mockFetch(async () => new Response(JSON.stringify({ models: [] })));
+    expect(await detectOllama(null)).toBeNull();
+    mockFetch(async () => {
+      throw new TypeError('fetch failed');
+    });
+    expect(await detectOllama(null)).toBeNull();
   });
 });
 

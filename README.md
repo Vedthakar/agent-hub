@@ -98,7 +98,7 @@ flowchart LR
 
 The daemon ships new lines from watched iMessage threads. MCP agents push sessions and pull context themselves. An iMessage or Telegram thread is routed after 10 minutes of quiet. A session logged with `log_session` is routed on the next pass.
 
-**Router.** One model pass (Anthropic or OpenAI, from the key you set) writes a short summary, situation updates, durable goals, and any tasks. Who sent each line comes from message metadata, not from the text. The transcript and the stored state are wrapped as untrusted data. With no API key, sessions are stored and not analysed.
+**Router.** One model pass writes a short summary, situation updates, durable goals, and any tasks. Who sent each line comes from message metadata, not from the text. The transcript and the stored state are wrapped as untrusted data. The default model is free and local: if [Ollama](https://ollama.com) is running when the hub starts, it is used with no key (`brew install ollama && brew services start ollama && ollama pull llama3.2`). An Anthropic or OpenAI key is optional and gives better results. With no model at all, sessions are stored and not analysed.
 
 **Situation.** This is short-lived state: what you are doing now, a plan, a temporary pause. Each item expires. If the model leaves the expiry off, the hub keeps it for 24 hours. A slot name (`now:activity`, `plan:2026-11-02`, `pause:open_source`) means a newer item replaces the older one. Tomorrow's plan can stay hidden until morning via `valid_from`. Goals and preferences are separate, and they stay until a later conversation retires them. You can clear a situation item on the dashboard.
 
@@ -129,7 +129,7 @@ Delivery uses the adapter for that agent: an MCP inbox, email, or Telegram. The 
 | --- | --- |
 | Messages database | Stays on the Mac. The daemon sends text from watched threads only. |
 | Events, situation, goals, tasks, audit log, hashed OAuth tokens | Hub database. Embedded PGlite in `.data/` when `DATABASE_URL` is unset, or your Postgres. |
-| Transcript and current state, for the summary | The router provider you configured (Anthropic or OpenAI). |
+| Transcript and current state, for the summary | The router model: Ollama on your Mac (nothing leaves it), or Anthropic/OpenAI if you added a key. |
 | Context an agent can use | The slice its scope allows, when it calls `get_situation` or when you approved a task. |
 | Grok webhook, if set | The task code. HMAC-SHA256 when `GROK_WEBHOOK_SECRET` is set. |
 | Logs | Message bodies are replaced with their length. |

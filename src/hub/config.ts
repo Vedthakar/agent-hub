@@ -61,7 +61,7 @@ export interface HubConfig {
     maxInvalidPerWindow: number;
   };
   router: {
-    provider: 'anthropic' | 'openai' | 'none';
+    provider: 'anthropic' | 'openai' | 'ollama' | 'none';
     model: string;
     apiKey: string | null;
     baseUrl: string | null;
@@ -103,6 +103,13 @@ export interface HubConfig {
   agentWebhooks: Partial<Record<AgentId, { url: string | null; secret: string | null }>>;
   /** True when sessionSecret was generated for this process only (dashboard logins reset on restart). */
   ephemeralSessionSecret: boolean;
+}
+
+/** Free, local default: Ollama (https://ollama.com). Picked automatically at boot when it's running and no key is set. */
+export const OLLAMA_DEFAULT_MODEL = 'llama3.2';
+
+export function defaultModel(provider: HubConfig['router']['provider']): string {
+  return provider === 'openai' ? 'gpt-4.1' : provider === 'ollama' ? OLLAMA_DEFAULT_MODEL : 'claude-sonnet-4-5';
 }
 
 export function loadConfig(env = process.env): HubConfig {
@@ -152,7 +159,7 @@ export function loadConfig(env = process.env): HubConfig {
     },
     router: {
       provider,
-      model: env.ROUTER_MODEL ?? (provider === 'openai' ? 'gpt-4.1' : 'claude-sonnet-4-5'),
+      model: env.ROUTER_MODEL ?? defaultModel(provider),
       apiKey: provider === 'openai' ? openaiKey : anthropicKey,
       baseUrl: env.ROUTER_BASE_URL ?? null,
       debounceMs: int(env, 'ROUTER_DEBOUNCE_MS', 10 * 60_000),

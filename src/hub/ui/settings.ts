@@ -38,13 +38,12 @@ export function settingsBody(hub: Hub): string {
     <div data-widget="test-text" data-input="#f-approval-handle" class="stack"><div class="row"><button type="button" class="btn secondary">Send a test text</button></div><div data-status class="hide"></div></div>
   </form>
 
-  <div class="section-head"><h2>AI key</h2></div>
+  <div class="section-head"><h2>AI model</h2></div>
   ${lock('router.key') ? `<div class="card muted">Set on the server (${h(lock('router.key')!)}).</div>` : `<form method="post" action="/settings/router" class="card stack">${hidden('back', back)}
-    <div class="seg" style="grid-template-columns:1fr 1fr"><label><input type="radio" name="router.provider" value="anthropic"${hub.cfg.router.provider !== 'openai' ? ' checked' : ''}> <b>Anthropic</b></label>
-      <label><input type="radio" name="router.provider" value="openai"${hub.cfg.router.provider === 'openai' ? ' checked' : ''}> <b>OpenAI</b></label></div>
-    ${field('router.key', 'API key', { type: 'password', secretSaved: c.isSet('router.key') })}
+    ${providerPicker(hub.cfg.router.provider)}
+    ${field('router.key', 'API key (only for Anthropic or OpenAI)', { type: 'password', secretSaved: c.isSet('router.key') })}
     <div class="row"><button class="btn">Save</button></div>
-    ${hub.cfg.router.apiKey ? '<div data-widget="test-router" class="stack"><div class="row"><button type="button" class="btn secondary">Test the key</button></div><div data-status class="hide"></div></div>' : ''}</form>`}
+    ${hub.llm ? `<div data-widget="test-router" class="stack"><div class="row"><button type="button" class="btn secondary">Test it</button></div><div data-status class="hide"></div></div>` : ''}</form>`}
 
   <div class="section-head"><h2>Email</h2></div><section class="card">${emailBlock(hub, back)}</section>
 
@@ -63,4 +62,16 @@ export function settingsBody(hub: Hub): string {
   <section class="card stack"><p>Prefer config files? Every setting can also come from environment variables (see <code>.env.example</code>). Anything set there wins over this page and shows as “Set in .env”.</p>
     ${fromEnv.length ? `<p class="muted small">From the environment right now: ${fromEnv.map(([, l]) => h(l)).join(', ')}.</p>` : '<p class="muted small">Nothing is coming from the environment right now.</p>'}
     <form method="post" action="/logout" class="inline"><button class="btn secondary">Sign out</button></form></section>`;
+}
+
+/** Free local model first: it needs no key and costs nothing. */
+export function providerPicker(current: string): string {
+  const pick = current === 'anthropic' || current === 'openai' ? current : 'ollama';
+  const opt = (v: string, name: string, note: string) =>
+    `<label><input type="radio" name="router.provider" value="${v}"${pick === v ? ' checked' : ''}> <b>${name}</b><span class="muted">${note}</span></label>`;
+  return `<div class="seg" style="grid-template-columns:1fr 1fr 1fr">
+    ${opt('ollama', 'Free (Ollama)', 'Runs on your Mac. No key, no cost.')}
+    ${opt('anthropic', 'Anthropic', 'Claude. Key from console.anthropic.com')}
+    ${opt('openai', 'OpenAI', 'Key from platform.openai.com')}</div>
+  <p class="muted small">Free setup, once: <code>brew install ollama && brew services start ollama && ollama pull llama3.2</code>, then restart the hub.</p>`;
 }

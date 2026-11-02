@@ -86,7 +86,16 @@ export function dashboardRouter(hub: Hub): Router {
   const local = `http://127.0.0.1:${cfg.port}`;
   r.use((req, res, next) => {
     if (req.method === 'GET' || req.method === 'HEAD') return next();
-    const from = req.get('origin') ?? (req.get('referer') ? new URL(req.get('referer')!).origin : null);
+    // These two are guarded by a secret (setup code / password) and need no session, so the origin adds nothing.
+    if (req.path === '/welcome' || req.path === '/login') return next();
+    let from: string | null = req.get('origin') ?? null;
+    if (from === null && req.get('referer')) {
+      try {
+        from = new URL(req.get('referer')!).origin;
+      } catch {
+        from = 'null';
+      }
+    }
     const host = (req.get('x-forwarded-host') ?? req.get('host') ?? '').split(',')[0].trim().toLowerCase();
     let fromHost = '';
     try {
@@ -98,7 +107,11 @@ export function dashboardRouter(hub: Hub): Router {
       const m = h.match(/^(localhost|127\.0\.0\.1|\[::1\]):(\d+)$/i);
       return m ? `loopback:${m[2]}` : h;
     };
-    const allowed = from === publicOrigin || Boolean(fromHost && host && (fromHost === host || loopback(fromHost) === loopback(host)));
+    // Editor preview panes (Cursor, VS Code) send an opaque Origin ("null", vscode-webview://…). On a hub only
+    // reachable locally that's allowed: a real cross-site page never gets the SameSite=Strict session cookie anyway.
+    const opaque = from !== null && !/^https?:\/\//i.test(from);
+    const localOnly = !req.get('x-forwarded-host') && !req.get('x-forwarded-for') && loopback(host) !== host;
+    const allowed = from === publicOrigin || (opaque && localOnly) || Boolean(fromHost && host && (fromHost === host || loopback(fromHost) === loopback(host)));
     if (!allowed && (from !== null || req.get('sec-fetch-site') === 'cross-site')) {
       void store.audit('hub', 'dashboard.cross_origin_blocked', { path: req.path, origin: from, host, site: req.get('sec-fetch-site') ?? null });
       // Never put the real setup token here: anyone who can reach the hub can trigger this page with a fake Origin.
@@ -295,8 +308,10 @@ export function dashboardRouter(hub: Hub): Router {
       if (unlocked('approval.handle') && str('approval.handle').trim()) result = await save({ 'approval.handle': str('approval.handle') });
     } else if (step === 'brain') {
       const patch: Record<string, string | null> = {};
-      if (['anthropic', 'openai'].includes(str('router.provider'))) patch['router.provider'] = str('router.provider');
-      if (str('router.key').trim()) patch['router.key'] = str('router.key');
+      if (['anthropic', 'openai', 'ollama'].includes(str('router.provider'))) patch['router.provider'] = str('router.provider');
+      if (patch['router.provider'] === 'ollama') {
+        if (conn.isSet('router.key')) patch['router.key'] = null;
+      } else if (str('router.key').trim()) patch['router.key'] = str('router.key');
       if (Object.keys(patch).length) result = await save(patch);
     } else if (step === 'agents') {
       const picked = ([] as string[]).concat(b.agent ?? []).filter((a): a is (typeof AGENT_IDS)[number] => isBuiltinAgent(a));
@@ -455,8 +470,11 @@ export function dashboardRouter(hub: Hub): Router {
   });
   r.post('/settings/router', requireOwner, async (req, res) => {
     const patch: Record<string, string | null> = {};
-    if (['anthropic', 'openai'].includes(req.body['router.provider'])) patch['router.provider'] = req.body['router.provider'];
-    if (String(req.body['router.key'] ?? '').trim()) patch['router.key'] = String(req.body['router.key']);
+    if (['anthropic', 'openai', 'ollama'].includes(req.body['router.provider'])) patch['router.provider'] = req.body['router.provider'];
+    // Choosing the free local model drops any saved key, or the key would switch it straight back.
+    if (patch['router.provider'] === 'ollama') {
+      if (conn.isSet('router.key')) patch['router.key'] = null;
+    } else if (String(req.body['router.key'] ?? '').trim()) patch['router.key'] = String(req.body['router.key']);
     const result = await save(patch);
     go(res, '/settings', result === 'ok' ? { ok: 'saved' } : { err: result });
   });
@@ -561,12 +579,12 @@ export function dashboardRouter(hub: Hub): Router {
     }
   });
   api.post('/router/test', async (_req, res) => {
-    if (!hub.llm) return res.status(400).json({ error: 'Add a key first.' });
+    if (!hub.llm) return res.status(400).json({ error: 'Pick a model first: the free local one (Ollama) or a key.' });
     try {
       await hub.llm.complete('You are a connectivity check. Reply with the single word OK.', 'ping');
       res.json({ ok: true, model: `${cfg.router.provider}:${cfg.router.model}` });
     } catch (err) {
-      res.status(502).json({ error: `The key didn’t work: ${String((err as Error).message ?? err).slice(0, 200)}` });
+      res.status(502).json({ error: `${cfg.router.provider === 'ollama' ? 'Couldn’t reach Ollama. Is it running, with the model pulled?' : 'The key didn’t work:'} ${String((err as Error).message ?? err).slice(0, 200)}` });
     }
   });
   api.post('/agents/:agent/test', (_req, res) => {

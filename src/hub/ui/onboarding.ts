@@ -4,6 +4,7 @@ import type { Hub } from '../hub.js';
 import { AGENT_META } from './agents.js';
 import { avatar, field, h, hidden } from './layout.js';
 import { connectPanel, keepAwakeBlock, macBlock } from './panels.js';
+import { providerPicker } from './settings.js';
 
 export type Step = 'welcome' | 'mac' | 'keep-awake' | 'phone' | 'brain' | 'agents' | `agent-${string}` | 'finish';
 
@@ -80,17 +81,14 @@ function phone(hub: Hub): StepView {
 }
 
 function brain(hub: Hub): StepView {
-  const provider = hub.cfg.router.provider === 'openai' ? 'openai' : 'anthropic';
   const saved = hub.connections.isSet('router.key');
   return {
     title: 'Give the hub a brain',
-    lead: 'The hub uses an AI model to read what happened in each conversation and decide what other agents should know. Bring your own key. It costs cents a day.',
+    lead: 'The hub uses an AI model to read what happened in each conversation and decide what other agents should know. The free option runs on your Mac with Ollama: no key, no bill, nothing leaves your computer.',
     formBody: `<div class="card stack">
-      <div class="seg" style="grid-template-columns:1fr 1fr">
-        <label><input type="radio" name="router.provider" value="anthropic"${provider === 'anthropic' ? ' checked' : ''}> <b>Anthropic</b><span class="muted">Claude. Key from console.anthropic.com</span></label>
-        <label><input type="radio" name="router.provider" value="openai"${provider === 'openai' ? ' checked' : ''}> <b>OpenAI</b><span class="muted">Key from platform.openai.com</span></label></div>
-      ${field('router.key', 'API key', { type: 'password', secretSaved: saved, placeholder: 'sk-…', help: `Saved encrypted (${h(hub.connections.secrets?.label ?? 'secret store')}). Never shown again.` })}
-      ${saved ? '<div data-widget="test-router" class="stack"><div class="row"><button type="button" class="btn secondary">Test the key</button></div><div data-status class="hide"></div></div>' : ''}</div>`,
+      ${providerPicker(hub.cfg.router.provider)}
+      ${field('router.key', 'API key (only for Anthropic or OpenAI)', { type: 'password', secretSaved: saved, placeholder: 'sk-…', help: `Saved encrypted (${h(hub.connections.secrets?.label ?? 'secret store')}). Never shown again.` })}
+      ${hub.llm ? '<div data-widget="test-router" class="stack"><div class="row"><button type="button" class="btn secondary">Test it</button></div><div data-status class="hide"></div></div>' : ''}</div>`,
     skippable: true,
   };
 }
