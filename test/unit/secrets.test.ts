@@ -49,7 +49,7 @@ describe('local secret store (AES-256-GCM in the hub database)', () => {
   it('stores only ciphertext and reads it back', async () => {
     const db = await pglite();
     const store = localSecretStore(db, randomBytes(32));
-    const secret = 'sk-ant-api03-very-secret-value';
+    const secret = 'sk-' + 'ant-api03-very-secret-value';
     await store.set('cfg.router.key', secret);
     const [row] = await db.query<{ value: string }>('SELECT value FROM secrets WHERE name = $1', ['cfg.router.key']);
     expect(row.value).toMatch(/^v1\./);

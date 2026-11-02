@@ -80,14 +80,45 @@ export function dashboardRouter(hub: Hub): Router {
   const { store, cfg } = hub;
   const conn = hub.connections;
   const r = express.Router();
-  // Defence in depth on top of SameSite=Strict: state-changing requests must come from the dashboard's own origin.
-  const origin = new URL(cfg.publicUrl).origin;
+  // Defence in depth on top of SameSite=Strict: POSTs must come from a page we served.
+  // Cursor's preview browser often sends Sec-Fetch-Site: cross-site even for localhost; Origin/Host is the real check.
+  const publicOrigin = new URL(cfg.publicUrl).origin;
+  const local = `http://127.0.0.1:${cfg.port}`;
   r.use((req, res, next) => {
     if (req.method === 'GET' || req.method === 'HEAD') return next();
     const from = req.get('origin') ?? (req.get('referer') ? new URL(req.get('referer')!).origin : null);
-    if (req.get('sec-fetch-site') === 'cross-site' || (from !== null && from !== origin)) {
-      void store.audit('hub', 'dashboard.cross_origin_blocked', { path: req.path, origin: from });
-      res.status(403).send('Cross-origin request blocked');
+    const host = (req.get('x-forwarded-host') ?? req.get('host') ?? '').split(',')[0].trim().toLowerCase();
+    let fromHost = '';
+    try {
+      fromHost = from ? new URL(from).host.toLowerCase() : '';
+    } catch {
+      fromHost = '';
+    }
+    const loopback = (h: string) => {
+      const m = h.match(/^(localhost|127\.0\.0\.1|\[::1\]):(\d+)$/i);
+      return m ? `loopback:${m[2]}` : h;
+    };
+    const allowed = from === publicOrigin || Boolean(fromHost && host && (fromHost === host || loopback(fromHost) === loopback(host)));
+    if (!allowed && (from !== null || req.get('sec-fetch-site') === 'cross-site')) {
+      void store.audit('hub', 'dashboard.cross_origin_blocked', { path: req.path, origin: from, host, site: req.get('sec-fetch-site') ?? null });
+      // Never put the real setup token here: anyone who can reach the hub can trigger this page with a fake Origin.
+      // Echo back only a token the caller already had in its own Referer.
+      let echoed = '';
+      try {
+        echoed = new URL(req.get('referer') ?? '').searchParams.get('token') ?? '';
+      } catch {
+        echoed = '';
+      }
+      const href = conn.hasOwnerPassword() ? local : `${local}/welcome${echoed ? `?token=${encodeURIComponent(echoed)}` : ''}`;
+      res.status(403).type('html').send(
+        page(
+          'Open in Safari or Chrome',
+          `<div class="card stack"><h1>Open this in Safari or Chrome</h1>
+            <p>The preview browser inside Cursor looks like another website, so the hub blocked the save. Copy this into Safari or Chrome:</p>
+            <p><a class="btn big" href="${h(href)}">${h(href)}</a></p></div>`,
+          { bare: true },
+        ),
+      );
       return;
     }
     next();

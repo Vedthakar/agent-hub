@@ -156,8 +156,8 @@ export class Connections {
   private ownerHash: PasswordHash | null = null;
   custom: CustomAgentDef[] = [];
   onboarding: OnboardingState = { completed: false, agents: [] };
-  /** Unlocks first-run password creation. Printed to the server log; never stored. */
-  readonly setupToken = randomBytes(18).toString('base64url');
+  /** Unlocks first-run password creation. Kept until a password exists so a restart doesn't kill the setup link. */
+  setupToken = randomBytes(18).toString('base64url');
   /** Set when the secret store couldn't be read (e.g. a locked Keychain). */
   secretError: string | null = null;
   onChange: (() => void | Promise<void>) | null = null;
@@ -178,6 +178,13 @@ export class Connections {
     this.onboarding = { completed: false, agents: [], ...(await s.getSetting<Partial<OnboardingState>>('onboarding', {})) };
     this.ownerHash = await s.getSetting<PasswordHash | null>('owner.password', null);
     this.daemonTokenHashes = await s.getSetting<string[]>('daemon.tokens', []);
+    if (!this.hasOwnerPassword()) {
+      const stored = await s.getSetting<string | null>('owner.setupToken', null);
+      if (stored) this.setupToken = stored;
+      else await s.setSetting('owner.setupToken', this.setupToken);
+    } else {
+      await s.setSetting('owner.setupToken', null);
+    }
     this.secretValues = {};
     if (this.secrets) {
       try {
@@ -328,6 +335,7 @@ export class Connections {
     if (!safeEqual(setupToken, this.setupToken)) return 'bad-token';
     if (password.length < 10) return 'weak';
     await this.storePassword(password);
+    await this.store.setSetting('owner.setupToken', null);
     await this.store.audit('owner', 'owner.password_created', {});
     return 'ok';
   }

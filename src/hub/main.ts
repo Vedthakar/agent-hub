@@ -43,7 +43,7 @@ async function main() {
 
   log.info('hub.secret_store', { kind: secrets.kind });
   if (!hub.connections.hasOwnerPassword()) {
-    // The only way in before a password exists. Printed once per boot, never stored.
+    // The only way in before a password exists. Same token across restarts until a password is set.
     const url = `${cfg.publicUrl}/welcome?token=${hub.connections.setupToken}`;
     log.info('hub.setup', { url, hint: 'open this link to create your dashboard password' });
     if (process.stdout.isTTY) console.log(`\n  Agent Hub is running. Open this link to set it up:\n\n    ${url}\n`);

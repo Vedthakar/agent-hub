@@ -176,7 +176,7 @@ None marked `TODO`/`FIXME`.
 - **Measured, not just designed:** 10k-message catch-up throughput, 50 concurrent `get_situation`, simultaneous approvals, and Messages.app restart mid-read. All step 5. Ingest is still one INSERT per message; batching is the expected step-5 fix.
 - **Live accounts:** Telegram FLOOD_WAIT and IMAP are only exercised with mocks or not at all. Grok spike not run against a live bot. `npm run smoke` (step 3) checks SMTP, Telegram MTProto, the approval channel and the MCP OAuth flow with real credentials, sending only to Ved.
 - **Postgres/Supabase:** done in step 3. Integration, e2e and RLS tests run on local Supabase (`npm run supabase:start`); `npm run test:offline` keeps a PGlite fallback.
-- **CSRF:** relies on `SameSite=Strict` cookies; step 4 decides whether to add tokens.
+- **CSRF:** done in step 4. `SameSite=Strict` plus an Origin / Referer / `Sec-Fetch-Site` check on every dashboard POST.
 - **Debrief end:** still inferred from burst quiet time; there's no explicit "debrief done" signal.
 
 ## Bugs found by the step-3 test suite: all fixed
@@ -193,4 +193,27 @@ None marked `TODO`/`FIXME`.
 | Malformed model JSON put V8's parse error, which quotes about 20 characters of conversation, into the `router.failed` log line | chat.db pipeline log test | `extractJson` reports only the position |
 | `LOG_LEVEL` was read once at import, so module-level loggers ignored later changes | Log test | Level is read on each call |
 
-Deferred to step 4: a literal `</transcript>` inside a transcript can close the router's data block early (prompt-injection vector). The router can also claim `author: "user"` for content an agent wrote.
+Both injection gaps deferred from step 3 (a literal `</transcript>` closing the router's data block early, and the router claiming `author: "user"` for agent text) are fixed in step 4.
+
+## Step 4: security review
+
+Full write-up, residual risks and the generated pass/fail table are in [THREAT_MODEL.md](THREAT_MODEL.md). The suite is `test/security/` (77 tests, IDs PI/DL/AU/AP/MA/SC/SB/SQ/CD/LG/LP); `npm run security:table` prints the table and `npm run security:mutants` reverts each fix to confirm a test catches it (15/15).
+
+| Gap | Found by | Fix |
+|---|---|---|
+| A literal `</transcript>` in a message closed the router's data block | Deferred from step 3 | Random per-call `untrusted-<nonce>` tags; tag-like text, lookalikes and the nonce defanged; stored state fenced too |
+| The model decided whether text was "user said" | Deferred from step 3 | No author in the schema; the model cites line ids and the hub sets authorship from `is_from_me` / Telegram `out`; every cited line must be the user's; MCP sessions are always agent |
+| MCP agents could restart the hop count by leaving out `task_code` | Code review | Chain = max(own claimed task, latest delivered task within 12h) |
+| Twilio approvals matched the sender on the last 10 digits (`+44…` passed) | Code review | Exact normalised match (`src/shared/handles.ts`), also for the iMessage approval thread |
+| Approval texts didn't flag agent-suggested hand-offs | Code review | "(agent-suggested, not from your messages)" |
+| Boardy's never-receive list was only the editable DB scope | Code review | `HARD_DENY` in code, merged into every check |
+| Keyword guard beaten by zero-width characters, spaced letters, fullwidth letters and accents | SC-03 | Normalisation before scanning |
+| `get_situation`, task context and the Boardy brief filtered by tags only | Code review | Same text scan there |
+| OAuth consent had no brute-force limit | Code review | Rate limit (`RATE_LIMIT_LOGIN_PER_15MIN`) |
+| A rotated-out refresh token went unnoticed | Code review | Reuse revokes every token for that client |
+| Password pages were frameable | Code review | `X-Frame-Options`, `frame-ancestors`, `nosniff`, `no-referrer` |
+| A NUL byte in a message failed the whole ingest batch on every retry | SQ-02 | NULs stripped from bound strings and JSON |
+| Non-numeric dashboard ids caused 500s | SQ-02 | Id params validated |
+| An MCP agent's own summary was overwritten by the router's | PI-13 | Kept verbatim in `raw_excerpt` |
+
+Still open (see THREAT_MODEL.md, residual risks): non-English sensitive words rely on tags plus approval; SMS caller-ID spoofing is outside Twilio's signature; no second factor on the dashboard; `HUB_SESSION_SECRET` still falls back to the owner password (with a boot warning).
