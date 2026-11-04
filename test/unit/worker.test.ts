@@ -9,6 +9,7 @@ const cfg = (over: Partial<HubConfig['worker']> = {}): HubConfig['worker'] => ({
   activeAccount: 'default',
   sources: [],
   model: 'haiku',
+  organizeModel: 'sonnet',
   maxRunsPerDay: 10,
   importRunsPerDay: 10,
   bin: 'claude',

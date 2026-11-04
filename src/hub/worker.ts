@@ -11,7 +11,7 @@ import type { HubConfig, WorkerAccount } from './config.js';
  */
 export interface Worker {
   /** Returns the agent's raw text reply. Callers are responsible for parsing. */
-  complete(system: string, user: string): Promise<string>;
+  complete(system: string, user: string, opts?: { model?: string }): Promise<string>;
   /** Token counts from the last run, when the agent reports them. */
   lastUsage?: { input: number; output: number } | null;
 }
@@ -95,9 +95,9 @@ export function createWorker(cfg: HubConfig['worker'], timeoutMs: number, run: R
   if (!cfg.enabled) return null;
   const worker: Worker = {
     lastUsage: null,
-    async complete(system, user) {
+    async complete(system, user, opts) {
       const account = cfg.accounts.find((a) => a.id === cfg.activeAccount);
-      const args = ['-p', '--output-format', 'json', '--tools', '', '--strict-mcp-config', '--setting-sources', '', '--no-session-persistence', '--disable-slash-commands', '--model', cfg.model, '--system-prompt', system];
+      const args = ['-p', '--output-format', 'json', '--tools', '', '--strict-mcp-config', '--setting-sources', '', '--no-session-persistence', '--disable-slash-commands', '--model', opts?.model ?? cfg.model, '--system-prompt', system];
       let res: RunResult;
       try {
         res = await run(claudeBin(cfg.bin), args, { stdin: user, env: accountEnv(account), timeoutMs });

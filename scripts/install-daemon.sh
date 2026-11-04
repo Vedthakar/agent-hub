@@ -58,7 +58,15 @@ cat > "$PLIST" <<EOF
 EOF
 
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
+# The stop above finishes in the background, and starting too soon fails, so give it a few tries.
+for attempt in 1 2 3 4 5 6; do
+  launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null && break
+  if [[ "$attempt" == 6 ]]; then
+    echo "Couldn't start the helper. Try running this script again."
+    exit 1
+  fi
+  sleep 2
+done
 
 cat <<EOF
 Installed $LABEL. Logs: $LOGS/daemon.log

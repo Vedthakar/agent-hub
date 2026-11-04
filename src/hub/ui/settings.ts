@@ -74,16 +74,20 @@ export function settingsBody(hub: Hub, signedIn: Record<string, boolean | null> 
 export const SWEEP_PROMPT = `Search my past chats and build my profile in Agent Hub. Look for: my job search, school, projects, content, goals, preferences, and the people I work with. For each lasting goal, preference or fact that still looks true, call save_memory once with one short sentence and the right topics. Save at most 40 items, the most useful first. Don't save passwords, account numbers or anything else secret. When you're done, list what you saved and what you were unsure about.`;
 
 function importBlock(hub: Hub, s: ImportStatus, history: { state: string; error?: string } | null): string {
-  const rows = s.bySource.map((r) => `<li><div class="grow"><b>${h(ADAPTERS[r.source as keyof typeof ADAPTERS]?.name ?? r.source)}</b><div class="muted small">${r.sorted} of ${r.total} chats sorted into folders</div></div></li>`).join('');
+  const LABELS: Record<string, string> = { claude: 'Claude chats', chatgpt: 'ChatGPT chats', 'claude-code': 'Claude Code sessions', codex: 'Codex sessions', 'claude-memory': 'Claude memory files', 'claude-project': 'Claude projects', 'claude-artifact': 'Claude artifacts', 'claude-code-cloud': 'Cloud routines' };
+  const rows = s.bySource.map((r) => `<li><div class="grow"><b>${h(LABELS[r.source] ?? ADAPTERS[r.source as keyof typeof ADAPTERS]?.name ?? r.source)}</b><div class="muted small">${r.sorted} of ${r.total} in their final folders</div></div></li>`).join('');
   const threads = (['instinct', 'stanley', 'boardy'] as const).filter((a) => hub.cfg.imessageHandles[a]);
   const left = s.bySource.reduce((n, r) => n + r.total - r.sorted, 0);
   return `<div class="section-head" id="import"><h2>Import your old chats</h2></div>
   <section class="card stack">
-    <p class="muted mb0">Files every old chat in your vault under <code>Library/</code>, then sorts it into folders. Agents find old chats by searching, so they don't slow down new ones.</p>
+    <p class="muted mb0">Files every old chat in your vault under <code>Library/</code>, reads it, then organizes everything into one folder tree. Agents find old chats by searching, so they don't slow down new ones.</p>
     ${rows ? `<ul class="list">${rows}</ul>` : ''}
-    ${left ? `<p class="muted small mb0">${hub.worker ? `Sorting in the background: ${left} left, using ${s.doneToday} of ${s.capPerDay} runs today.` : `${left} chats are filed under Library/Unsorted. Turn on the background worker to sort them.`}</p>` : ''}
+    ${left ? `<p class="muted small mb0">${hub.worker ? `Working in the background: ${left} left, using ${s.doneToday} of ${s.capPerDay} runs today.` : `${left} are waiting. Turn on the background worker to sort them.`}</p>` : ''}
+    ${s.bySource.length && !left && hub.worker ? '<form method="post" action="/settings/import/reorganize" class="inline" data-confirm="Build the folder tree again? Notes you moved yourself stay put."><button class="btn secondary sm">Organize again</button></form>' : ''}
     ${s.waiting.length ? `<p class="muted small mb0">Reading: ${s.waiting.map(h).join(', ')}</p>` : ''}
-    ${s.failed.length ? `<div class="banner err"><div><b>Couldn't read:</b> ${s.failed.map(h).join(', ')}. Paste the error from Activity to get it fixed.</div></div>` : ''}
+    ${s.failed.length ? `<div class="banner err"><div><b>Couldn't read:</b> ${s.failed.map(h).join(', ')}. The reason is in Activity.</div></div>` : ''}
+    <div><b>Code sessions: no export needed</b><p class="muted small">Reads your Claude Code and Codex sessions on this Mac, including new ones as they happen. Your words and replies only, without tool output, and keys are removed. Cloud session transcripts aren't available: Anthropic's export only lists when they ran.</p>
+      <form method="post" action="/settings/import/code" class="inline"><button class="btn secondary">${s.codeOn ? 'Check for new sessions now' : 'Import Code sessions'}</button></form></div>
     <div><b>Claude and ChatGPT: the complete way</b>
       <ol class="muted small"><li>Claude: Settings → Privacy → Export data. ChatGPT: Settings → Data controls → Export data.</li><li>Download the file from the email. The link expires after 24 hours.</li><li>Move the file, still zipped, into <code>${h(path.join(hub.cfg.vaultPath, 'Import'))}</code>. The hub picks it up by itself.</li></ol></div>
     <div><b>Instinct and Stanley: no export needed</b><p class="muted small">Reads your older messages in those iMessage threads from your Mac.</p>

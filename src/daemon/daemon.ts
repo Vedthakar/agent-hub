@@ -5,7 +5,7 @@ import type { Logger } from '../shared/log.js';
 import { ChatDb, normalizeHandle } from './chatdb.js';
 import type { MacOps } from './mac.js';
 
-export const DAEMON_VERSION = '0.3.0';
+export const DAEMON_VERSION = '0.4.0';
 
 export interface DaemonState {
   lastRowId: number;

@@ -732,16 +732,18 @@ export class Store {
 
   // ---------- imported history ----------
 
-  /** Returns true if this is new or changed. Unchanged chats keep their folder and cost nothing. */
-  async upsertArchive(a: { source: string; externalId: string; title: string; messages: ArchiveMessage[]; hash: string; startedAt: Date | null; updatedAt: Date | null }): Promise<boolean> {
+  /** Returns true if this is new or changed. Unchanged chats keep their folder and cost nothing. A changed chat is read again. */
+  async upsertArchive(a: { source: string; externalId: string; title: string; messages: ArchiveMessage[]; hash: string; startedAt: Date | null; updatedAt: Date | null; kind?: string; folder?: string | null; summary?: string | null }): Promise<boolean> {
+    const ruled = a.kind && a.kind !== 'chat';
     const rows = await this.db.query(
-      `INSERT INTO archive (source, external_id, title, messages, hash, started_at, updated_at)
-       VALUES ($1, $2, $3, $4::text::jsonb, $5, $6, $7)
+      `INSERT INTO archive (source, external_id, title, messages, hash, started_at, updated_at, kind, folder, summary, read_version, organized_at, sorted_at)
+       VALUES ($1, $2, $3, $4::text::jsonb, $5, $6, $7, $8, $9, $10, $11, $12, $12)
        ON CONFLICT (source, external_id) DO UPDATE
-         SET title = EXCLUDED.title, messages = EXCLUDED.messages, hash = EXCLUDED.hash, updated_at = EXCLUDED.updated_at, needs_write = true
+         SET title = EXCLUDED.title, messages = EXCLUDED.messages, hash = EXCLUDED.hash, updated_at = EXCLUDED.updated_at, needs_write = true,
+             read_version = LEAST(archive.read_version, EXCLUDED.read_version), organized_at = COALESCE(EXCLUDED.organized_at, archive.organized_at)
          WHERE archive.hash <> EXCLUDED.hash
        RETURNING id`,
-      [a.source, a.externalId, a.title, toJson(a.messages), a.hash, a.startedAt, a.updatedAt],
+      [a.source, a.externalId, a.title, toJson(a.messages), a.hash, a.startedAt, a.updatedAt, a.kind ?? 'chat', a.folder ?? null, a.summary ?? null, ruled ? 99 : 0, a.kind === 'memory' ? new Date() : null],
     );
     return rows.length > 0;
   }
@@ -764,13 +766,31 @@ export class Store {
     await this.db.query('UPDATE archive SET vault_path = $2, needs_write = false WHERE id = $1', [id, vaultPath]);
   }
 
-  /** Oldest first, and a chat that keeps failing to sort stops being retried after a few tries. */
-  archiveToSort(limit: number): Promise<ArchiveRow[]> {
-    return this.db.query('SELECT * FROM archive WHERE sorted_at IS NULL AND sort_attempts < 3 ORDER BY id LIMIT $1', [limit]);
+  /** Oldest first, and a chat that keeps failing stops being retried after a few tries. */
+  archiveToRead(limit: number, version: number): Promise<ArchiveRow[]> {
+    return this.db.query('SELECT * FROM archive WHERE read_version < $2 AND sort_attempts < 3 ORDER BY id LIMIT $1', [limit, version]);
   }
 
-  async markArchiveSorted(id: number, folder: string, topics: string[], summary: string): Promise<void> {
-    await this.db.query('UPDATE archive SET folder = $2, topics = $3, summary = $4, sorted_at = now(), needs_write = true WHERE id = $1', [id, folder, topics, summary]);
+  async markArchiveRead(id: number, folder: string | null, topics: string[], summary: string, version: number): Promise<void> {
+    await this.db.query('UPDATE archive SET folder = $2, topics = $3, summary = $4, read_version = $5, sorted_at = now(), needs_write = true, sort_attempts = 0 WHERE id = $1', [id, folder, topics, summary, version]);
+  }
+
+  archiveToOrganize(limit: number): Promise<ArchiveRow[]> {
+    return this.db.query('SELECT * FROM archive WHERE organized_at IS NULL AND sort_attempts < 3 ORDER BY id LIMIT $1', [limit]);
+  }
+
+  async markArchiveOrganized(id: number, folder: string | null, topics: string[], rewrite: boolean): Promise<void> {
+    await this.db.query('UPDATE archive SET folder = $2, topics = $3, organized_at = now(), sorted_at = COALESCE(sorted_at, now()), needs_write = $4 OR needs_write, sort_attempts = 0 WHERE id = $1', [id, folder, topics, rewrite]);
+  }
+
+  /** "Organize again": forgets the folder tree so the next pass builds a new one. Memory files stay where they are. */
+  async resetArchiveOrganization(): Promise<void> {
+    await this.db.query("UPDATE archive SET organized_at = NULL, sort_attempts = 0 WHERE kind <> 'memory'");
+  }
+
+  /** Just what index notes need, so they don't load every message. */
+  archiveIndex(): Promise<Pick<ArchiveRow, 'id' | 'title' | 'folder' | 'summary' | 'vault_path'>[]> {
+    return this.db.query('SELECT id, title, folder, summary, vault_path FROM archive ORDER BY started_at DESC NULLS LAST, id DESC');
   }
 
   async bumpArchiveAttempts(ids: number[]): Promise<void> {
@@ -783,7 +803,7 @@ export class Store {
   }
 
   archiveCounts(): Promise<{ source: string; total: number; sorted: number }[]> {
-    return this.db.query(`SELECT source, count(*)::int AS total, count(sorted_at)::int AS sorted FROM archive GROUP BY source ORDER BY source`);
+    return this.db.query(`SELECT source, count(*)::int AS total, count(organized_at)::int AS sorted FROM archive GROUP BY source ORDER BY source`);
   }
 
   /** Every word must appear somewhere. Parameters are bound and wildcards escaped. */
@@ -834,6 +854,12 @@ export class Store {
     return rows[0];
   }
 
+  /** Is a history read still waiting on, or being done by, your Mac? */
+  async historyJobActive(): Promise<boolean> {
+    const rows = await this.db.query("SELECT 1 FROM daemon_jobs WHERE kind = 'read-history' AND status IN ('pending', 'claimed') AND created_at > now() - interval '10 minutes' LIMIT 1");
+    return rows.length > 0;
+  }
+
   async job(id: number): Promise<DaemonJobRow | undefined> {
     const rows = await this.db.query<DaemonJobRow>('SELECT * FROM daemon_jobs WHERE id = $1', [id]);
     return rows[0];
@@ -863,6 +889,9 @@ export interface ArchiveRow {
   needs_write: boolean;
   sorted_at: Date | null;
   sort_attempts: number;
+  kind: string;
+  read_version: number;
+  organized_at: Date | null;
 }
 
 export interface DaemonJobRow {

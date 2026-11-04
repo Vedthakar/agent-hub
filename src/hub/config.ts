@@ -78,6 +78,8 @@ export interface HubConfig {
     /** Agents whose conversations the worker may read. */
     sources: string[];
     model: string;
+    /** For seeing a whole library at once, which takes more judgment than reading one chat. */
+    organizeModel: string;
     maxRunsPerDay: number;
     /** Separate from maxRunsPerDay, so a big import can't crowd out live conversations. */
     importRunsPerDay: number;
@@ -172,6 +174,7 @@ export function loadConfig(env = process.env): HubConfig {
       activeAccount: DEFAULT_WORKER_ACCOUNT.id,
       sources: (env.WORKER_SOURCES ?? 'instinct,stanley,boardy').split(',').map((s) => s.trim()).filter(Boolean),
       model: env.WORKER_MODEL ?? 'haiku',
+      organizeModel: env.WORKER_ORGANIZE_MODEL ?? 'sonnet',
       maxRunsPerDay: int(env, 'WORKER_MAX_RUNS_PER_DAY', 50),
       importRunsPerDay: int(env, 'IMPORT_MAX_RUNS_PER_DAY', 30),
       bin: env.WORKER_CLAUDE_BIN ?? null,

@@ -122,9 +122,11 @@ A hand-off you type is your approval, so it goes straight out, except over SMS, 
 
 **Importing your old chats.** New chats save as they go, but old chats can't call tools, so **Settings → Import your old chats** brings them in once:
 
-- **Claude and ChatGPT:** export from the app, then move the zip into `Import/` in your vault. Every chat is filed under `Library/` right away, with no AI and no tokens. A newer export only adds what changed.
+- **Claude and ChatGPT:** export from the app, then move every file it gives you into `Import/` in your vault. Claude's memory files, projects, pages and cloud routine prompts come in too, and account data like login history is set aside. Every chat is filed under `Library/` right away, with no AI and no tokens. A newer export only adds what changed.
+- **Code sessions:** one button reads your Claude Code and Codex sessions on this Mac and keeps checking for new ones, filed by repo. Only your words and the replies come in, not tool output. Anthropic's export only lists when cloud sessions ran, so their transcripts can't be imported.
 - **Instinct and Stanley:** one button reads the older messages in those iMessage threads from your Mac, with no export. Each day becomes one note.
-- **Sorting:** the worker sorts chats into folders like `Library/Job Search/Stripe application` in batches of 40, reading only the title and first message, up to `IMPORT_MAX_RUNS_PER_DAY` batches a day. The folder sets which agents can see a chat. It can guess wrong, so move a note if it's in the wrong place.
+- **Sorting:** two background passes. First the worker reads each chat, sampling across the whole thing, and writes a summary. Then a stronger model (`WORKER_ORGANIZE_MODEL`) sees every summary at once and builds one folder tree, like `Library/School/MAT224`, so a project stays together. Index notes link it all, so Obsidian's graph shows real clusters. The folder sets which agents can see a chat. It can still guess wrong: move a note and it stays where you put it, or use **Organize again**.
+- **Privacy:** keys pasted into old chats are removed on the way in. A sample of each chat and its summary go to Anthropic for sorting, through your own account.
 - **Using them:** agents find old chats with `search_history` and `read_old_chat`, limited by the same topic rules. Imported chats never become tasks or current state, and they stay out of `get_situation`, so they don't slow down new chats.
 - **Quick start:** a prompt you can paste into Claude or ChatGPT saves your main goals and preferences right away, using that app's own search. It won't find everything.
 

@@ -456,7 +456,9 @@ export function dashboardRouter(hub: Hub): Router {
 
   r.get('/settings', requireOwner, async (req, res) => {
     const signedIn = Object.fromEntries(await Promise.all(cfg.worker.accounts.map(async (a) => [a.id, await accountSignedIn(cfg.worker, a)] as const)));
-    const imports = { status: await hub.importer.status(), history: await store.getSetting<{ state: string; error?: string } | null>('import.history', null) };
+    let history = await store.getSetting<{ state: string; error?: string } | null>('import.history', null);
+    if (history?.state === 'reading' && !(await store.historyJobActive())) history = { state: 'failed', error: 'your Mac helper didn’t pick this up' };
+    const imports = { status: await hub.importer.status(), history };
     send(res, 'Settings', settingsBody(hub, signedIn, imports), { nav: 'settings', ...flashOf(req) });
   });
   r.post('/settings/profile', requireOwner, async (req, res) => {
@@ -494,6 +496,17 @@ export function dashboardRouter(hub: Hub): Router {
     const result = await save(patch);
     await store.audit('owner', 'worker.account_removed', { id });
     go(res, '/settings', result === 'ok' ? { ok: 'saved' } : { err: result });
+  });
+  r.post('/settings/import/code', requireOwner, async (_req, res) => {
+    await store.audit('owner', 'import.code_started', {});
+    void hub.importer.scanCodeSessions(new Date(), true).then(() => hub.kick()).catch((err) => store.audit('hub', 'import.step_failed', { error: String(err).slice(0, 200) }));
+    res.redirect(303, '/settings#import');
+  });
+  r.post('/settings/import/reorganize', requireOwner, async (_req, res) => {
+    await store.resetArchiveOrganization();
+    await store.audit('owner', 'import.reorganize', {});
+    hub.kick();
+    res.redirect(303, '/settings#import');
   });
   r.post('/settings/import/history', requireOwner, async (_req, res) => {
     const handles = (['instinct', 'stanley', 'boardy'] as const).map((a) => cfg.imessageHandles[a]).filter((x): x is string => Boolean(x));
