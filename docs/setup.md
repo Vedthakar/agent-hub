@@ -135,6 +135,8 @@ Reply `Y K3FD`, `N K3FD`, or `cancel K3FD`. A bare `Y` is rejected so the hub kn
 
 ## Connect Claude, ChatGPT, and Gemini
 
+Claude, ChatGPT, and Gemini connect from their own servers, so the hub needs a public `https://` address. `npm run tunnel` gets one with ngrok's free, permanent dev domain, saves it as `HUB_PUBLIC_URL` in `.env`, and prints the connector URL. Restart the hub once afterward, and keep the tunnel running. ngrok shows a one-time "Visit Site" page in your browser the first time you approve a connection.
+
 URL: `$HUB_PUBLIC_URL/mcp`. The server speaks Streamable HTTP and OAuth 2.1 (dynamic client registration and PKCE). Each token is bound to the agent you pick on the consent screen. The password on that screen is `HUB_OWNER_PASSWORD`.
 
 - **Claude:** Settings → Connectors → Add custom connector → the URL. On the consent screen, choose Claude.

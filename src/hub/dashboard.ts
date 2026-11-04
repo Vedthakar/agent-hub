@@ -166,7 +166,8 @@ export function dashboardRouter(hub: Hub): Router {
   };
   const issueSession = (res: Response) => {
     const exp = String(Date.now() + SESSION_TTL_MS);
-    const secure = cfg.publicUrl.startsWith('https://') ? '; Secure' : '';
+    // By how this request arrived, not the public address: a Secure cookie would break sign-in on http://localhost in Safari.
+    const secure = res.req.secure ? '; Secure' : '';
     res.setHeader('Set-Cookie', `${COOKIE}=${exp}.${sign(cfg.sessionSecret, exp)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}${secure}`);
   };
   const t = (d: Date | string | null) => (d ? formatLocal(new Date(d), cfg.timezone) : '—');
