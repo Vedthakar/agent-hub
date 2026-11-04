@@ -285,6 +285,19 @@ describe('onboarding wizard', () => {
     expect((await b.get('/onboarding/agent-nobody')).headers.get('location')).toBe('/onboarding');
   });
 
+  it('adds, picks and removes a worker account; removing the active one falls back to the default', async () => {
+    const h = await hubFor();
+    const b = browser(h.url);
+    await b.login();
+    expect(await b.submit('/settings/worker/account', { label: 'Work account' })).toBe('/settings?ok=saved');
+    expect(h.cfg.worker.accounts.map((a) => a.id)).toEqual(['default', 'work-account']);
+    expect(await b.submit('/settings/worker', { account: 'work-account' })).toBe('/settings?ok=saved');
+    expect(h.cfg.worker.activeAccount).toBe('work-account');
+    expect(await b.submit('/settings/worker/account/work-account/remove', {})).toBe('/settings?ok=saved');
+    expect(h.cfg.worker.accounts.map((a) => a.id)).toEqual(['default']);
+    expect(h.cfg.worker.activeAccount).toBe('default');
+  });
+
   it('skips the worker step when it is set from the environment', async () => {
     const h = await hubFor({ WORKER_ENABLED: '1' });
     const b = browser(h.url);

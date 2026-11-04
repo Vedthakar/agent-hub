@@ -82,10 +82,10 @@ export function workerBlock(hub: Hub, signedIn: Record<string, boolean | null>, 
     <label class="choice"><input type="checkbox" name="enabled" value="1"${w.enabled ? ' checked' : ''}><span class="grow"><b>Turn on the background worker</b></span></label>
     <div><b>Conversations it may read</b><div class="muted small">These go to Anthropic through your account. Leave one off and the hub only records that the chat happened.</div>
     ${READABLE_AGENTS.map((a) => `<label class="choice"><input type="checkbox" name="source" value="${a}"${w.sources.includes(a) ? ' checked' : ''}><span class="grow">${h(ADAPTERS[a].name)}</span></label>`).join('')}</div>
-    <div><b>Account</b>${w.accounts.map((a) => `<label class="choice"><input type="radio" name="account" value="${h(a.id)}"${a.id === w.activeAccount ? ' checked' : ''}><span class="grow"><b>${h(a.label)}</b> ${status(a.id)}<div class="muted small">Sign in once in Terminal: <code>${h(login(a.configDir))}</code></div></span></label>`).join('')}</div>
+    <div><b>Account</b>${w.accounts.map((a) => `<label class="choice"><input type="radio" name="account" value="${h(a.id)}"${a.id === w.activeAccount ? ' checked' : ''}><span class="grow"><b>${h(a.label)}</b> ${status(a.id)}${signedIn[a.id] === true ? '' : `<div class="muted small">To sign in, run this in Terminal: <code>${h(login(a.configDir))}</code></div>`}</span>${a.configDir ? `<button class="btn ghost sm" formaction="/settings/worker/account/${h(a.id)}/remove" formnovalidate>Remove</button>` : ''}</label>`).join('')}</div>
     <div class="row"><button class="btn">Save</button></div>
     ${hub.worker ? '<div data-widget="test-router" class="stack"><div class="row"><button type="button" class="btn secondary">Test it</button></div><div data-status class="hide"></div></div>' : ''}</form>
   <form method="post" action="/settings/worker/account" class="card row">${hidden('back', back)}
-    <div class="grow">${field('label', 'Add another account', { placeholder: 'Work account', help: 'Each account signs in separately, so you can switch when one runs out or you change plans.' })}</div>
+    <div class="grow">${field('label', 'Add another Claude account (nickname)', { placeholder: 'Work account', help: 'Just a name for you to recognize it, not your email. You sign in with the Terminal command it gives you. Only needed if you have a second Claude account.' })}</div>
     <button class="btn secondary">Add</button></form>`;
 }

@@ -486,6 +486,14 @@ export function dashboardRouter(hub: Hub): Router {
     const result = await save({ 'worker.accounts': JSON.stringify(accounts) });
     go(res, '/settings', result === 'ok' ? { ok: 'saved' } : { err: result });
   });
+  r.post('/settings/worker/account/:id/remove', requireOwner, async (req, res) => {
+    const id = String(req.params.id);
+    const patch: Record<string, string | null> = { 'worker.accounts': JSON.stringify(cfg.worker.accounts.filter((a) => a.configDir && a.id !== id)) };
+    if (cfg.worker.activeAccount === id) patch['worker.account'] = 'default';
+    const result = await save(patch);
+    await store.audit('owner', 'worker.account_removed', { id });
+    go(res, '/settings', result === 'ok' ? { ok: 'saved' } : { err: result });
+  });
   r.post('/settings/vault', requireOwner, async (req, res) => {
     const dir = String(req.body['vault.path'] ?? '').trim();
     if (!path.isAbsolute(dir)) return go(res, '/settings', { err: 'invalid' });
