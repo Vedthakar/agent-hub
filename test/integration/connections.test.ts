@@ -286,7 +286,7 @@ describe('onboarding wizard', () => {
   });
 
   it('adds, picks and removes a worker account; removing the active one falls back to the default', async () => {
-    const h = await hubFor();
+    const h = await hubFor({});
     const b = browser(h.url);
     await b.login();
     expect(await b.submit('/settings/worker/account', { label: 'Work account' })).toBe('/settings?ok=saved');
