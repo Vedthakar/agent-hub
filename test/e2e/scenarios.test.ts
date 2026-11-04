@@ -26,7 +26,7 @@ describe('scenario (a): nightly debrief', () => {
     const claude = await s.mcp('claude-token');
 
     // Earlier today: a Claude session and a chat with Stanley.
-    s.llm.next.push((user) => {
+    s.worker.next.push((user) => {
       expect(user).toContain('CONVERSATION SOURCE: claude');
       return { summary: 'Ved outlined the Agent Hub launch post with Claude.', topics: ['projects', 'content'] };
     });
@@ -34,7 +34,7 @@ describe('scenario (a): nightly debrief', () => {
     s.say(HANDLES.stanley, 'Any hook ideas for the launch video?');
     s.say(HANDLES.stanley, 'Open with the before/after of your messy agent setup.', false);
     await s.poll();
-    s.llm.next.push((user) => {
+    s.worker.next.push((user) => {
       expect(user).toContain('Stanley: Open with the before/after');
       return { summary: 'Stanley suggested opening the launch video with a before/after of the agent setup.', topics: ['content'] };
     });
@@ -63,7 +63,7 @@ describe('scenario (a): nightly debrief', () => {
 
     const tomorrow = startOfLocalDay(new Date(Date.now() + 26 * 3600_000), TZ);
     const tomorrowEnd = startOfLocalDay(new Date(tomorrow.getTime() + 26 * 3600_000), TZ);
-    s.llm.next.push((user) => {
+    s.worker.next.push((user) => {
       expect(user).toContain('MODE: NIGHTLY DEBRIEF');
       expect(user).toContain('Ved: Study 9-11, shoot the launch video at 3, gym at 6');
       // The digest the hub emailed is not part of the conversation being routed.
@@ -105,7 +105,7 @@ describe('scenario (b): "pause open source for a week"', () => {
     s.say(HANDLES.instinct, "Let's pause open source for a week, I need to focus on the assessment");
     s.say(HANDLES.instinct, "Done. I'll let your Grok bot know.", false);
     await s.poll();
-    s.llm.next.push((user) => {
+    s.worker.next.push((user) => {
       expect(user).toContain("Ved: Let's pause open source for a week");
       const evidence = cite(user, "Let's pause open source");
       return {
@@ -151,7 +151,7 @@ describe('scenario (c): "I need to shoot tomorrow"', () => {
     await s.hub.tick(); // first Telegram poll: the side-channel thread is still empty
     const claude = await s.mcp('claude-token');
 
-    s.llm.next.push((user) => {
+    s.worker.next.push((user) => {
       expect(user).toContain('I need to shoot tomorrow');
       return {
         summary: 'Ved needs to shoot a video tomorrow and wants a script from Stanley.',
@@ -179,7 +179,7 @@ describe('scenario (c): "I need to shoot tomorrow"', () => {
 
     // Stan answers in the side channel; the reply becomes a hop-1 event tied to the task.
     s.telegram.reply('Here is your 60s script: HOOK — “I gave my AI agents a group chat.”');
-    s.llm.next.push(() => ({ summary: 'Stanley delivered the 60-second script.', topics: ['content'] }));
+    s.worker.next.push(() => ({ summary: 'Stanley delivered the 60-second script.', topics: ['content'] }));
     await s.hub.tick();
     await s.settle();
     const events = await s.store.recentEvents(5);
@@ -198,17 +198,12 @@ describe('scenario (d): cross-agent context', () => {
     const claude = await s.mcp('claude-token');
     const boardy = await s.mcp('boardy-token');
 
-    s.llm.next.push((user) => {
-      expect(user).toContain('CONVERSATION SOURCE: gemini');
-      return {
-        summary: 'Ved studied eigenvalues with Gemini for the linear algebra midterm on Friday.',
-        topics: ['school'],
-        situation: [{ text: 'Studying for the linear algebra midterm (Friday)', slot: 'school:midterm', topics: ['school'], expires_at: inDays(3), evidence: ['m1'] }],
-      };
-    });
-    await gemini('log_session', { summary: 'Studied eigenvalues for the linear algebra midterm on Friday', topics: ['school'] });
+    // Gemini saves it itself, as it chats: no worker run needed.
+    await gemini('set_situation', { text: 'Studying for the linear algebra midterm (Friday)', topics: ['school'], slot: 'school:midterm', expires_at: inDays(3) });
+    await gemini('log_session', { summary: 'Ved studied eigenvalues with Gemini for the linear algebra midterm on Friday.', topics: ['school'] });
     await s.hub.tick();
     await s.hub.idle();
+    expect(s.worker.calls).toHaveLength(0);
 
     const view = await claude('get_situation');
     expect(view).toContain('Studying for the linear algebra midterm (Friday) (via Gemini, agent-reported');

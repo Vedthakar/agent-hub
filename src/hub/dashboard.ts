@@ -1,4 +1,5 @@
 import { createHmac, randomBytes } from 'node:crypto';
+import path from 'node:path';
 import express, { type Request, type Response, type NextFunction, type Router } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { AGENT_IDS, TOPICS, agentIds, isAgentId, isBuiltinAgent, type AgentId, type Autonomy, type CustomAgentId } from '../shared/types.js';
@@ -16,6 +17,7 @@ import { EMAIL_PROVIDERS, editableKeys, mailUrl, type EmailProvider } from './ui
 import { settingsBody } from './ui/settings.js';
 import { macStatus } from './ui/status.js';
 import { todayBody, todayFragment } from './ui/today.js';
+import { accountSignedIn } from './worker.js';
 
 export { standingInstructions } from './ui/panels.js';
 
@@ -170,6 +172,7 @@ export function dashboardRouter(hub: Hub): Router {
   const t = (d: Date | string | null) => (d ? formatLocal(new Date(d), cfg.timezone) : '—');
   const name = (a: string) => (isAgentId(a) ? ADAPTERS[a].name : a);
   const flashOf = (req: Request) => {
+    if (req.query.ok === 'told') return { flash: lastTell, flashKind: 'ok' as const };
     const ok = typeof req.query.ok === 'string' ? OK_MESSAGES[req.query.ok] : undefined;
     const err = typeof req.query.err === 'string' ? ERR_MESSAGES[req.query.err] : undefined;
     return err ? { flash: err, flashKind: 'err' as const } : ok ? { flash: ok, flashKind: 'ok' as const } : {};
@@ -307,12 +310,7 @@ export function dashboardRouter(hub: Hub): Router {
     } else if (step === 'phone') {
       if (unlocked('approval.handle') && str('approval.handle').trim()) result = await save({ 'approval.handle': str('approval.handle') });
     } else if (step === 'brain') {
-      const patch: Record<string, string | null> = {};
-      if (['anthropic', 'openai', 'ollama'].includes(str('router.provider'))) patch['router.provider'] = str('router.provider');
-      if (patch['router.provider'] === 'ollama') {
-        if (conn.isSet('router.key')) patch['router.key'] = null;
-      } else if (str('router.key').trim()) patch['router.key'] = str('router.key');
-      if (Object.keys(patch).length) result = await save(patch);
+      if (unlocked('worker.enabled')) result = await save({ 'worker.enabled': str('enabled') === '1' ? '1' : '0' });
     } else if (step === 'agents') {
       const picked = ([] as string[]).concat(b.agent ?? []).filter((a): a is (typeof AGENT_IDS)[number] => isBuiltinAgent(a));
       await conn.setOnboarding({ agents: AGENT_IDS.filter((a) => picked.includes(a)) });
@@ -455,8 +453,9 @@ export function dashboardRouter(hub: Hub): Router {
 
   // ---------- settings ----------
 
-  r.get('/settings', requireOwner, (req, res) => {
-    send(res, 'Settings', settingsBody(hub), { nav: 'settings', ...flashOf(req) });
+  r.get('/settings', requireOwner, async (req, res) => {
+    const signedIn = Object.fromEntries(await Promise.all(cfg.worker.accounts.map(async (a) => [a.id, await accountSignedIn(cfg.worker, a)] as const)));
+    send(res, 'Settings', settingsBody(hub, signedIn), { nav: 'settings', ...flashOf(req) });
   });
   r.post('/settings/profile', requireOwner, async (req, res) => {
     const patch: Record<string, string | null> = {};
@@ -468,14 +467,29 @@ export function dashboardRouter(hub: Hub): Router {
     const result = conn.source('approval.handle') === 'env' ? 'env' : await save({ 'approval.handle': String(req.body['approval.handle'] ?? '').trim() || null });
     go(res, '/settings', result === 'ok' ? { ok: 'saved' } : { err: result });
   });
-  r.post('/settings/router', requireOwner, async (req, res) => {
-    const patch: Record<string, string | null> = {};
-    if (['anthropic', 'openai', 'ollama'].includes(req.body['router.provider'])) patch['router.provider'] = req.body['router.provider'];
-    // Choosing the free local model drops any saved key, or the key would switch it straight back.
-    if (patch['router.provider'] === 'ollama') {
-      if (conn.isSet('router.key')) patch['router.key'] = null;
-    } else if (String(req.body['router.key'] ?? '').trim()) patch['router.key'] = String(req.body['router.key']);
+  r.post('/settings/worker', requireOwner, async (req, res) => {
+    const account = String(req.body.account ?? '');
+    const sources = ([] as string[]).concat(req.body.source ?? []).filter((a) => isAgentId(a));
+    const patch: Record<string, string | null> = { 'worker.enabled': req.body.enabled === '1' ? '1' : '0', 'worker.sources': sources.join(',') };
+    if (cfg.worker.accounts.some((a) => a.id === account)) patch['worker.account'] = account;
     const result = await save(patch);
+    await store.audit('owner', 'worker.settings', { enabled: patch['worker.enabled'], account: patch['worker.account'] ?? cfg.worker.activeAccount, sources });
+    go(res, '/settings', result === 'ok' ? { ok: 'saved' } : { err: result });
+  });
+  r.post('/settings/worker/account', requireOwner, async (req, res) => {
+    const label = String(req.body.label ?? '').trim().slice(0, 60);
+    const id = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+    if (!id || cfg.worker.accounts.some((a) => a.id === id)) return go(res, '/settings', { err: 'invalid' });
+    const dir = path.resolve(path.dirname(cfg.pgliteDir), 'claude-accounts', id);
+    const accounts = [...cfg.worker.accounts.filter((a) => a.configDir), { id, label, configDir: dir }];
+    const result = await save({ 'worker.accounts': JSON.stringify(accounts) });
+    go(res, '/settings', result === 'ok' ? { ok: 'saved' } : { err: result });
+  });
+  r.post('/settings/vault', requireOwner, async (req, res) => {
+    const dir = String(req.body['vault.path'] ?? '').trim();
+    if (!path.isAbsolute(dir)) return go(res, '/settings', { err: 'invalid' });
+    const result = await save({ 'vault.path': dir });
+    hub.kick();
     go(res, '/settings', result === 'ok' ? { ok: 'saved' } : { err: result });
   });
   r.post('/settings/password', requireOwner, loginLimit, async (req, res) => {
@@ -579,12 +593,12 @@ export function dashboardRouter(hub: Hub): Router {
     }
   });
   api.post('/router/test', async (_req, res) => {
-    if (!hub.llm) return res.status(400).json({ error: 'Pick a model first: the free local one (Ollama) or a key.' });
+    if (!hub.worker) return res.status(400).json({ error: 'Turn on the background worker first.' });
     try {
-      await hub.llm.complete('You are a connectivity check. Reply with the single word OK.', 'ping');
-      res.json({ ok: true, model: `${cfg.router.provider}:${cfg.router.model}` });
+      await hub.worker.complete('You are a connectivity check. Reply with the single word OK.', 'ping');
+      res.json({ ok: true, model: `${cfg.worker.activeAccount}, ${cfg.worker.model}` });
     } catch (err) {
-      res.status(502).json({ error: `${cfg.router.provider === 'ollama' ? 'Couldn’t reach Ollama. Is it running, with the model pulled?' : 'The key didn’t work:'} ${String((err as Error).message ?? err).slice(0, 200)}` });
+      res.status(502).json({ error: `The worker didn’t answer: ${String((err as Error).message ?? err).slice(0, 200)}` });
     }
   });
   api.post('/agents/:agent/test', (_req, res) => {
@@ -657,8 +671,8 @@ export function dashboardRouter(hub: Hub): Router {
     const items = [
       ...events.map((e) => ({
         at: new Date(e.occurred_at),
-        html: `<b>${h(name(e.agent))}</b> ${pill(e.kind)} ${e.hop ? pill(`hop ${e.hop}`) : ''}
-          ${h(e.summary || '(not routed yet)')}<div class="muted small">${e.topics.map(h).join(', ')} · ${e.author === 'user' ? 'with you' : 'agent-reported'}</div>
+        html: `<b>${h(name(e.agent))}</b> ${pill(e.kind)} ${e.triage && e.triage !== 'log' ? pill(e.triage, 'accent') : ''} ${e.hop ? pill(`hop ${e.hop}`) : ''}
+          ${h(e.summary || '(waiting for the worker)')}<div class="muted small">${e.topics.map(h).join(', ')} · ${e.author === 'user' ? 'with you' : 'agent-reported'}</div>
           ${e.raw_excerpt ? `<details class="more"><summary>excerpt</summary><pre>${h(e.raw_excerpt)}</pre></details>` : ''}`,
       })),
       ...audit.map((a) => ({ at: new Date(a.at), html: `<span class="muted">${h(a.actor)} · ${h(a.action)}</span> <code class="small">${h(JSON.stringify(a.detail))}</code>` })),
@@ -775,6 +789,17 @@ export function dashboardRouter(hub: Hub): Router {
     await store.supersedeSituation([Number(req.params.id)], null);
     await store.audit('owner', 'situation.cleared', { id: Number(req.params.id) });
     res.redirect(303, '/');
+  });
+
+  // "Tell them once": the same plain commands you can text the hub.
+  let lastTell = 'Saved.';
+  r.post('/actions/tell', requireOwner, async (req, res) => {
+    const kind = String(req.body.kind ?? '');
+    const text = String(req.body.text ?? '').trim().slice(0, 500);
+    if (!text || !(['now', 'today', 'tomorrow', 'goal'].includes(kind) || isAgentId(kind))) return go(res, '/', { err: 'invalid' });
+    lastTell = (await hub.approvals.runCommand(`${kind}: ${text}`, 'dashboard')) ?? 'Saved.';
+    hub.kick();
+    res.redirect(303, '/?ok=told');
   });
 
   r.post('/actions/debrief-digest', requireOwner, async (_req, res) => {

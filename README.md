@@ -84,21 +84,43 @@ The default is ask-first. Per-route `notify` and `auto` exist for hand-offs take
 | Stanley | iMessage read, Telegram read and write | Daemon reads iMessage; adapter polls Telegram / tasks on Telegram | A separate Telegram chat. Context rides with the task. There is no digest. Content and shoots. |
 | Boardy | iMessage read, email write, IMAP read | Daemon and inbox replies / email brief | Sends to `boardy@boardy.ai`. Professional and networking only. |
 
-MCP tools are `get_situation`, `log_session`, `get_inbox`, `propose_task`, and `update_task`. Each OAuth connection is bound to one agent.
+MCP tools are `get_situation`, `set_situation`, `save_memory`, `retire_memory`, `log_session`, `get_inbox`, `propose_task`, and `update_task`. Each OAuth connection is bound to one agent.
 
 ## How it works
 
 ```mermaid
 flowchart LR
   Mac["Mac daemon"] --> Hub["Hub"]
-  Hub --> Router["Router"]
-  Router --> Adapters["Adapters"]
+  Hub --> Router["Rules, then worker"]
+  Router --> Vault["Obsidian vault"]
+  Router --> Adapters["Permissions, approvals, adapters"]
   Adapters --> Agents["Agents"]
 ```
 
 The daemon ships new lines from watched iMessage threads. MCP agents push sessions and pull context themselves. An iMessage or Telegram thread is routed after 10 minutes of quiet. A session logged with `log_session` is routed on the next pass.
 
-**Router.** One model pass writes a short summary, situation updates, durable goals, and any tasks. Who sent each line comes from message metadata, not from the text. The transcript and the stored state are wrapped as untrusted data. The default model is free and local: if [Ollama](https://ollama.com) is running when the hub starts, it is used with no key (`brew install ollama && brew services start ollama && ollama pull llama3.2`). An Anthropic or OpenAI key is optional and gives better results. With no model at all, sessions are stored and not analysed.
+**Router.** Rules come first, so most items cost nothing. A chat that a rule can't settle goes to the background worker, which writes a short summary, situation updates, durable goals, and any tasks, and sorts the item as memory, task, both, or just a log line. Who sent each line comes from message metadata, not from the text. The transcript and the stored state are wrapped as untrusted data.
+
+**No AI of its own, no API keys.** The hub has no model. The worker is Claude Code in headless mode (`claude -p`), signed in with the Claude plan you already have, with every tool switched off, so it can only reply with text. It's off until you turn it on, and you choose whose chats it may read. Without it, agents still share context through the tools below, you can still text the hub, and a chat is recorded only as having happened. API credentials are stripped from its environment, so it can't turn into a metered bill. It does use your plan's limits, capped at `WORKER_MAX_RUNS_PER_DAY`. If an account hits a limit, conversations wait and the hub texts you once.
+
+**Switching accounts.** Add accounts in **Settings → Background worker**. Each signs in separately (it gets its own `CLAUDE_CONFIG_DIR`), and you pick which one runs. Switching is your choice: the hub doesn't rotate accounts by itself to get around a plan's limits.
+
+**Saving as you chat.** Claude, ChatGPT, Gemini, and Grok Bot save with one short tool call: `set_situation`, `save_memory`, `retire_memory`, `propose_task`, or `log_session`. An agent can't replace or retire what you said yourself.
+
+**Texting the hub.** Fixed formats, no AI, from your own devices only, in the approval thread or the box on **Today**:
+
+```text
+now: in an assessment until 22:00
+today: applying to fintech backend roles
+tomorrow: shoot the launch video at 3 #shoots
+goal: launch on Monday #work
+forget: launch on Monday
+stanley: write a script for the shoot
+```
+
+A hand-off you type is your approval, so it goes straight out, except over SMS, where caller ID can be spoofed. `#topic` decides who may see it. Untagged items reach only agents with access to everything.
+
+**Vault.** Open the vault folder (`VAULT_PATH`, default `.data/vault`, also in Settings) in Obsidian. `Memory/` holds one note per goal, preference, fact, and situation item. Edit a note and agents see the new text; delete it and it's retired. Drop a note in `Inbox/` and the hub files it. `Log/` has a line for each thing an agent did, and `Tasks.md` is a read-only view. Tasks, approvals, and permissions stay in the database, so editing a file can never approve anything. Agents reach memory only through the hub's tools, so their topic limits still apply.
 
 **Situation.** This is short-lived state: what you are doing now, a plan, a temporary pause. Each item expires. If the model leaves the expiry off, the hub keeps it for 24 hours. A slot name (`now:activity`, `plan:2026-11-02`, `pause:open_source`) means a newer item replaces the older one. Tomorrow's plan can stay hidden until morning via `valid_from`. Goals and preferences are separate, and they stay until a later conversation retires them. You can clear a situation item on the dashboard.
 
@@ -129,7 +151,8 @@ Delivery uses the adapter for that agent: an MCP inbox, email, or Telegram. The 
 | --- | --- |
 | Messages database | Stays on the Mac. The daemon sends text from watched threads only. |
 | Events, situation, goals, tasks, audit log, hashed OAuth tokens | Hub database. Embedded PGlite in `.data/` when `DATABASE_URL` is unset, or your Postgres. |
-| Transcript and current state, for the summary | The router model: Ollama on your Mac (nothing leaves it), or Anthropic/OpenAI if you added a key. |
+| Transcript and current state, for the summary | Only if you turn the worker on, and only for the agents you pick: Anthropic, through your own Claude account. |
+| Memory notes | Your vault folder, on the machine running the hub. |
 | Context an agent can use | The slice its scope allows, when it calls `get_situation` or when you approved a task. |
 | Grok webhook, if set | The task code. HMAC-SHA256 when `GROK_WEBHOOK_SECRET` is set. |
 | Logs | Message bodies are replaced with their length. |
@@ -210,7 +233,7 @@ export const acme: Adapter = {
   id: 'acme',
   name: 'Acme',
   capabilities: {
-    profile: 'One sentence the router reads when choosing a target.',
+    profile: 'One sentence the worker reads when choosing a target.',
     readVia: 'email',
     deliverVia: 'email',
     canReceiveTasks: true,
@@ -246,9 +269,20 @@ Reads that arrive on their own (the daemon, MCP) use `NO_PULL_READS`. Polling re
 - **More connectors.**
 - **A Mac menu-bar app.** Today the daemon is a launchd agent (`com.agenthub.daemon`).
 
+## Built on
+
+Agent Hub borrows from these open-source projects. Thanks to their authors.
+
+| Project | License | How it's used |
+| --- | --- | --- |
+| [Open Second Brain](https://github.com/itechmeat/open-second-brain) | MIT | Code adapted: atomic note writes and the vault path-escape check, in `src/hub/vaultFs.ts` ([notice](THIRD_PARTY_NOTICES.md)). Idea: Obsidian-compatible Markdown as agent memory. |
+| [obsidian-second-brain](https://github.com/eugeniughelbur/obsidian-second-brain) | MIT | Idea only: Crew's one-line-per-job logbook inspired `Log/`. No code copied. |
+| [agent-second-brain](https://github.com/smixs/agent-second-brain) | MIT | Idea only: a second brain running on a Claude plan you already have. No code copied. |
+| [LifeOS](https://github.com/nbramia/LifeOS) | GPL-3.0 | Idea only: sending one person's work to different engines, with a human queue. No code copied. |
+
 ## Disclaimer
 
-Agent Hub is not affiliated with Anthropic, OpenAI, Google, Instinct, Stanley, Boardy, or Grok Bot. Those products can change how they connect, and a connector that works today can need a new setup later.
+Agent Hub is not affiliated with Anthropic, OpenAI, Google, the projects above, Instinct, Stanley, Boardy, or Grok Bot. Those products can change how they connect, and a connector that works today can need a new setup later.
 
 ## Contributing
 

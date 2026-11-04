@@ -82,7 +82,7 @@ describe('Supabase: RLS, keys and secrets', () => {
 
   it('SB-04 config has no built-in secrets: with an empty environment every credential is empty', () => {
     const cfg = loadConfig({});
-    expect([cfg.ownerPassword, cfg.daemonToken, cfg.router.apiKey ?? '', cfg.approval.twilio.authToken ?? '', cfg.approval.telegramBotToken ?? '', cfg.grokWebhookSecret ?? '']).toEqual(['', '', '', '', '', '']);
+    expect([cfg.ownerPassword, cfg.daemonToken, cfg.approval.twilio.authToken ?? '', cfg.approval.telegramBotToken ?? '', cfg.grokWebhookSecret ?? '']).toEqual(['', '', '', '', '']);
     expect(Object.keys(cfg.agentTokens)).toEqual([]);
     // No session key in env means a random one per process (replaced by the stored key once the secret store loads).
     expect(cfg.ephemeralSessionSecret).toBe(true);
@@ -241,11 +241,11 @@ describe('logs', () => {
       body: JSON.stringify({ messages: [msg(HANDLES.instinct, `my ${SECRET}1 midterm`, { fromMe: true }), msg(HANDLES.approval, `Y ${SECRET}2`, { fromMe: true })] }),
     });
     // The model echoes the conversation back as garbage, then the provider errors.
-    h.llm.next.push(() => `not json ${SECRET}3`);
+    h.worker.next.push(() => `not json ${SECRET}3`);
     await h.hub.collectBursts(minutesFromNow(11));
     await h.hub.routePending();
     const failing = { complete: async () => { throw new Error('upstream 500'); } };
-    (h.hub as unknown as { llm: unknown }).llm = failing;
+    (h.hub as unknown as { worker: unknown }).worker = failing;
     await h.store.insertEvent({ agent: 'claude', occurredAt: new Date(), author: 'agent', rawExcerpt: `${SECRET}4`, summary: `${SECRET}5`, topics: [], kind: 'session' });
     await h.hub.routePending();
     // Delivery failure with the payload in hand.

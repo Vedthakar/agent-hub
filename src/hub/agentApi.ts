@@ -1,7 +1,8 @@
 import { agentIds, isAgentId, type AgentId } from '../shared/types.js';
 import { ADAPTERS } from './adapters/index.js';
+import { situationFor } from './context.js';
 import type { Hub } from './hub.js';
-import { cleanTopics } from './router.js';
+import { cleanTopics } from './scopes.js';
 import type { TaskRow } from './store.js';
 import { REPLY_ATTRIBUTION_WINDOW_MS, proposeTask } from './tasks.js';
 
@@ -43,7 +44,8 @@ export async function logSession(hub: Hub, agent: AgentId, args: LogSessionArgs)
     occurredAt: new Date(),
     author: 'agent',
     rawExcerpt: raw,
-    summary: args.summary,
+    // Other agents read the summary, so decisions have to be in it to reach them.
+    summary: args.decisions?.length ? `${args.summary} Decisions: ${args.decisions.join('; ')}.` : args.summary,
     topics: args.topics ? cleanTopics(args.topics) : [],
     kind: 'session',
     causedByTaskId: task?.id ?? null,
@@ -52,6 +54,62 @@ export async function logSession(hub: Hub, agent: AgentId, args: LogSessionArgs)
   await hub.store.touchRead(agent);
   hub.kick();
   return { eventId: event.id };
+}
+
+export interface SetSituationArgs {
+  text: string;
+  topics: string[];
+  expires_at?: string;
+  valid_from?: string;
+  slot?: string;
+}
+
+/** A small note about what's true right now. Replacing a slot can't touch what you said yourself or what this agent can't see. */
+export async function setSituation(hub: Hub, agent: AgentId, args: SetSituationArgs): Promise<{ ok: boolean; message: string; id?: number }> {
+  const { store } = hub;
+  const now = new Date();
+  const validFrom = args.valid_from ? new Date(args.valid_from) : now;
+  const expiresAt = args.expires_at ? new Date(args.expires_at) : new Date(validFrom.getTime() + 24 * 3600_000);
+  if (Number.isNaN(validFrom.getTime()) || Number.isNaN(expiresAt.getTime())) return { ok: false, message: 'Rejected: dates must be ISO-8601.' };
+  if (expiresAt <= now) return { ok: false, message: 'Rejected: that has already expired.' };
+  const slot = args.slot?.trim() || null;
+  if (slot) {
+    const view = await situationFor(store, agent, now);
+    const holders = (await store.currentAndUpcomingSituation(now)).filter((s) => s.slot === slot);
+    const blocked = holders.some((s) => s.author === 'user' || !view.situation.some((v) => v.id === s.id));
+    if (blocked) return { ok: false, message: `Rejected: "${slot}" holds something only ${hub.cfg.ownerName} can replace. Leave the slot out to add a separate item.` };
+  }
+  const row = await store.addSituation({ text: args.text.trim(), slot, topics: cleanTopics(args.topics), sourceAgent: agent, author: 'agent', originEventId: null, validFrom, expiresAt });
+  await store.touchRead(agent);
+  await store.audit(agent, 'situation.added', { id: row.id });
+  hub.kick();
+  return { ok: true, message: `Saved (situation ${row.id}).`, id: row.id };
+}
+
+export interface SaveMemoryArgs {
+  text: string;
+  kind: 'goal' | 'preference' | 'fact';
+  topics: string[];
+}
+
+export async function saveMemory(hub: Hub, agent: AgentId, args: SaveMemoryArgs): Promise<{ ok: boolean; message: string }> {
+  await hub.store.addFact({ text: args.text.trim(), kind: args.kind, topics: cleanTopics(args.topics), sourceAgent: agent, author: 'agent', originEventId: null });
+  await hub.store.touchRead(agent);
+  await hub.store.audit(agent, 'memory.saved', { kind: args.kind });
+  hub.kick();
+  return { ok: true, message: 'Saved.' };
+}
+
+/** An agent can retire what agents wrote and it can see. What you said yourself is yours to retire. */
+export async function retireMemory(hub: Hub, agent: AgentId, id: number): Promise<{ ok: boolean; message: string }> {
+  const view = await situationFor(hub.store, agent);
+  const fact = (await hub.store.activeFacts()).find((f) => f.id === id);
+  if (!fact || !view.facts.some((f) => f.id === id)) return { ok: false, message: 'No such memory.' };
+  if (fact.author === 'user') return { ok: false, message: `Rejected: ${hub.cfg.ownerName} said this, so only ${hub.cfg.ownerName} can retire it.` };
+  await hub.store.retireFacts([id]);
+  await hub.store.audit(agent, 'memory.retired', { id });
+  hub.kick();
+  return { ok: true, message: 'Retired.' };
 }
 
 export async function inbox(hub: Hub, agent: AgentId) {

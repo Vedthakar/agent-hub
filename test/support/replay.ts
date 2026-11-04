@@ -1,13 +1,13 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { createLlm, type Llm } from '../../src/hub/llm.js';
+import { createWorker, type Worker } from '../../src/hub/worker.js';
 import { loadConfig } from '../../src/hub/config.js';
 
 /**
  * One recorded LLM exchange. `source` says where the reply came from:
  * - "recorded": captured from a real model with GOLDEN_RECORD=1 (model name kept);
- * - "authored": written by hand as the expected model reply (used when no API key is available).
+ * - "authored": written by hand as the expected model reply (used without a signed-in worker).
  * The prompt hash pins the exact system + user prompt the reply belongs to, so a prompt change can't
  * silently replay a stale answer.
  */
@@ -33,16 +33,15 @@ export function replayMode(): ReplayMode {
 }
 
 /**
- * Replays `file`. In record mode it calls the real model (ANTHROPIC_API_KEY / OPENAI_API_KEY) and
+ * Replays `file`. In record mode it runs the real worker (Claude Code, signed in) and
  * overwrites the file. In rehash mode it keeps an *authored* reply but refreshes its prompt hash
  * (for intentional prompt edits); recorded replies must be re-recorded instead.
  */
-export function replayLlm(file: string, id: string): Llm & { used: () => boolean; lastPrompt: () => { system: string; user: string } | null } {
+export function replayWorker(file: string, id: string): Worker & { used: () => boolean; lastPrompt: () => { system: string; user: string } | null } {
   const mode = replayMode();
   let used = false;
   let last: { system: string; user: string } | null = null;
-  const real = mode === 'record' ? createLlm(loadConfig().router) : null;
-  if (mode === 'record' && !real) throw new Error('GOLDEN_RECORD=1 needs ANTHROPIC_API_KEY or OPENAI_API_KEY');
+  const real = mode === 'record' ? createWorker({ ...loadConfig().worker, enabled: true }, 180_000) : null;
   return {
     used: () => used,
     lastPrompt: () => last,
@@ -53,11 +52,10 @@ export function replayLlm(file: string, id: string): Llm & { used: () => boolean
       const hash = promptHash(system, user);
       if (mode === 'record') {
         const reply = await real!.complete(system, user);
-        const cfg = loadConfig().router;
-        save(file, { id, source: 'recorded', model: `${cfg.provider}:${cfg.model}`, recordedAt: new Date().toISOString(), promptSha256: hash, reply });
+        save(file, { id, source: 'recorded', model: `claude-code:${loadConfig().worker.model}`, recordedAt: new Date().toISOString(), promptSha256: hash, reply });
         return reply;
       }
-      if (!existsSync(file)) throw new Error(`${id}: no recording at ${file}. Run with GOLDEN_RECORD=1 and an API key.`);
+      if (!existsSync(file)) throw new Error(`${id}: no recording at ${file}. Run with GOLDEN_RECORD=1 and Claude Code signed in.`);
       const rec = JSON.parse(readFileSync(file, 'utf8')) as Recording;
       if (rec.promptSha256 !== hash) {
         if (mode === 'rehash' && rec.source === 'authored') {

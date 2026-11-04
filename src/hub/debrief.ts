@@ -1,7 +1,7 @@
 import { ADAPTERS } from './adapters/index.js';
 import type { AdapterContext } from './adapters/types.js';
 import { buildDebriefDigest } from './context.js';
-import { backoffMs } from './llm.js';
+import { backoffMs } from './backoff.js';
 import type { RawMessageRow } from './store.js';
 import { localDateKey } from './tz.js';
 

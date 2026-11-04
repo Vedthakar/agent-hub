@@ -208,12 +208,10 @@ describe('onboarding wizard', () => {
     expect((await b.api<{ status: string }>('GET', `/outbox/${test.body.outboxId}`)).body.status).toBe('sent');
     expect(await b.submit('/onboarding/phone', { 'approval.handle': HANDLES.approval })).toBe('/onboarding/brain');
 
-    // Step 5: the router's AI key goes to the encrypted store, never the settings table.
-    expect(await b.submit('/onboarding/brain', { 'router.provider': 'anthropic', 'router.key': 'sk-ant-test-wizard-key' })).toBe('/onboarding/agents');
-    expect(h.cfg.router.apiKey).toBe('sk-ant-test-wizard-key');
-    const dump = JSON.stringify(await h.store.db.query('SELECT * FROM settings')) + JSON.stringify(await h.store.db.query('SELECT * FROM secrets'));
-    expect(dump).not.toContain('sk-ant-test-wizard-key');
-    expect(dump).toContain('cfg.router.key');
+    // Step 5: the background worker is opt-in, and turning it on stores no key anywhere.
+    expect(h.cfg.worker.enabled).toBe(false);
+    expect(await b.submit('/onboarding/brain', { enabled: '1' })).toBe('/onboarding/agents');
+    expect(h.cfg.worker.enabled).toBe(true);
 
     // Step 6: pick agents. Picked ones are switched on, the rest off, and each gets its own step.
     expect(await b.submit('/onboarding/agents', { agent: ['claude', 'instinct', 'grok'] })).toBe('/onboarding/agent-claude');
@@ -287,8 +285,8 @@ describe('onboarding wizard', () => {
     expect((await b.get('/onboarding/agent-nobody')).headers.get('location')).toBe('/onboarding');
   });
 
-  it('skips the AI key step when the key comes from the environment', async () => {
-    const h = await hubFor({ ANTHROPIC_API_KEY: 'sk-ant-env' });
+  it('skips the worker step when it is set from the environment', async () => {
+    const h = await hubFor({ WORKER_ENABLED: '1' });
     const b = browser(h.url);
     await b.login();
     expect(await b.submit('/onboarding/phone', { 'approval.handle': HANDLES.approval })).toBe('/onboarding/agents');

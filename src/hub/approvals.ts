@@ -1,8 +1,11 @@
-import type { Autonomy } from '../shared/types.js';
+import { agentIds, type AgentId, type Autonomy } from '../shared/types.js';
 import { log } from '../shared/log.js';
 import { ADAPTERS } from './adapters/index.js';
+import { COMMAND_HELP, parseCommand } from './commands.js';
 import type { HubConfig } from './config.js';
+import { canSee } from './scopes.js';
 import type { Store, TaskRow } from './store.js';
+import { proposeTask } from './tasks.js';
 import type { Transports } from './transports/index.js';
 
 export interface InboundCommand {
@@ -17,7 +20,10 @@ export interface InboundCommand {
 
 export type CommandOutcome =
   | 'paused' | 'resumed' | 'approved' | 'rejected' | 'cancelled' | 'mixed'
-  | 'invalid' | 'expired' | 'stale' | 'missing_code' | 'locked' | 'replay' | 'rejected_sender' | 'ignored';
+  | 'noted' | 'invalid' | 'expired' | 'stale' | 'missing_code' | 'locked' | 'replay' | 'rejected_sender' | 'ignored';
+
+/** Stands in for an agent id on things you said directly to the hub. */
+const OWNER = 'owner' as AgentId;
 
 const DECISION = /^\s*(y|yes|ok|okay|approve|approved|n|no|nope|reject|deny|cancel)\b(.*)$/i;
 const CODE_TOKEN = /\b[A-Z0-9]{4}\b/g;
@@ -116,6 +122,65 @@ export class Approvals {
     return expired.length;
   }
 
+  /**
+   * Your own instruction, already authenticated by the caller. Returns the reply, or null if it isn't a command.
+   * A hand-off you typed is your approval, except over SMS, where caller ID can be spoofed: that still asks.
+   */
+  async runCommand(text: string, via: string): Promise<string | null> {
+    const { store, cfg } = this.deps;
+    const c = parseCommand(text, { tz: cfg.timezone });
+    if (!c) return null;
+    switch (c.type) {
+      case 'help':
+        return `Things you can text me:\n${COMMAND_HELP}\nAdd #topic to say who may see it.`;
+      case 'situation': {
+        await store.addSituation({ text: c.text, slot: c.slot, topics: c.topics, sourceAgent: OWNER, author: 'user', originEventId: null, validFrom: c.validFrom, expiresAt: c.expiresAt });
+        await store.audit('user', 'situation.added', { via });
+        return `Noted. ${await this.whoSees(c.topics)}`;
+      }
+      case 'goal':
+        await store.addFact({ text: c.text, kind: 'goal', topics: c.topics, sourceAgent: OWNER, author: 'user', originEventId: null });
+        await store.audit('user', 'goal.added', { via });
+        return `Goal saved. ${await this.whoSees(c.topics)}`;
+      case 'forget': {
+        const needle = c.text.toLowerCase();
+        const facts = (await store.activeFacts()).filter((f) => f.text.toLowerCase().includes(needle));
+        const live = (await store.currentAndUpcomingSituation()).filter((s) => s.text.toLowerCase().includes(needle));
+        const total = facts.length + live.length;
+        if (!total) return 'Nothing matches that.';
+        if (total > 1) return `That matches ${total} things. Be more specific:\n${[...facts, ...live].slice(0, 5).map((x) => `- ${x.text}`).join('\n')}`;
+        await store.retireFacts(facts.map((f) => f.id));
+        await store.supersedeSituation(live.map((s) => s.id), null);
+        await store.audit('user', 'memory.forgotten', { via });
+        return 'Forgotten.';
+      }
+      case 'task': {
+        const scope = await store.scope(c.target);
+        const topics = c.topics ?? (scope?.allow_topics.filter((t) => t !== '*').slice(0, 1) ?? []);
+        const outcome = await proposeTask(store, { originAgent: OWNER, targetAgent: c.target, payload: c.text, rationale: '', topics: topics.length ? topics : ['general'], author: 'user', originEventId: null, hop: 1 }, cfg.router.maxHops);
+        const name = ADAPTERS[c.target].name;
+        if (outcome.kind === 'invalid') return `Couldn't send that: ${outcome.reason}.`;
+        if (outcome.kind === 'duplicate') return `Already on it as [${outcome.existing.code}] (${outcome.existing.status}).`;
+        if (outcome.kind === 'blocked') return `Not sent to ${name}: ${outcome.reason}.`;
+        if (via !== 'sms') await store.transitionTask(outcome.task.id, ['proposed'], 'approved', { reason: `your command (${via})` });
+        this.deps.kick();
+        return via === 'sms' ? `Reply "Y ${outcome.task.code}" to send it to ${name}.` : `Sending to ${name} [${outcome.task.code}]. Text "cancel ${outcome.task.code}" to stop it.`;
+      }
+    }
+  }
+
+  /** Says who will actually see something, so you can add a #topic if that isn't who you meant. */
+  private async whoSees(topics: string[]): Promise<string> {
+    const scopes = await this.deps.store.scopes();
+    const names = agentIds().filter((a) => canSee(scopes.get(a), topics)).map((a) => ADAPTERS[a].name);
+    return names.length ? `${names.join(', ')} can see it.` : 'No agent can see it yet.';
+  }
+
+  /** For a vault Inbox note: true if it was a command. */
+  async ownerCommand(text: string, via: string): Promise<boolean> {
+    return (await this.runCommand(text, via)) !== null;
+  }
+
   async handleInbound(cmd: InboundCommand): Promise<CommandOutcome> {
     const { store, cfg } = this.deps;
     const recordId = await store.recordInbound(cmd.channel, cmd.externalId, cmd.fromOwner ? 'owner' : cmd.sender, cmd.text);
@@ -143,6 +208,9 @@ export class Approvals {
       this.deps.kick();
       return finish('resumed', 'Hub resumed.');
     }
+
+    const reply = await this.runCommand(text, cmd.channel);
+    if (reply !== null) return finish('noted', reply);
 
     const m = text.match(DECISION);
     if (!m) return finish('ignored');

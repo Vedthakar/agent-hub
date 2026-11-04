@@ -4,14 +4,13 @@ import type { Hub } from '../hub.js';
 import { AGENT_META } from './agents.js';
 import { avatar, field, h, hidden } from './layout.js';
 import { connectPanel, keepAwakeBlock, macBlock } from './panels.js';
-import { providerPicker } from './settings.js';
 
 export type Step = 'welcome' | 'mac' | 'keep-awake' | 'phone' | 'brain' | 'agents' | `agent-${string}` | 'finish';
 
 /** The wizard's steps for this hub, in order. Agent steps follow the agents picked in "agents". */
 export function wizardSteps(hub: Hub): Step[] {
   const s: Step[] = ['welcome', 'mac', 'keep-awake', 'phone'];
-  if (hub.connections.source('router.key') !== 'env') s.push('brain');
+  if (hub.connections.source('worker.enabled') !== 'env') s.push('brain');
   s.push('agents');
   for (const a of hub.connections.onboarding.agents) s.push(`agent-${a}`);
   s.push('finish');
@@ -81,14 +80,12 @@ function phone(hub: Hub): StepView {
 }
 
 function brain(hub: Hub): StepView {
-  const saved = hub.connections.isSet('router.key');
   return {
-    title: 'Give the hub a brain',
-    lead: 'The hub uses an AI model to read what happened in each conversation and decide what other agents should know. The free option runs on your Mac with Ollama: no key, no bill, nothing leaves your computer.',
+    title: 'Let Claude read your chats (optional)',
+    lead: 'A background worker can read your Instinct, Stanley and Boardy chats and sort them into memory and tasks. It uses Claude Code on the Claude plan you already have: no API key and no extra bill. Skip this and everything else still works.',
     formBody: `<div class="card stack">
-      ${providerPicker(hub.cfg.router.provider)}
-      ${field('router.key', 'API key (only for Anthropic or OpenAI)', { type: 'password', secretSaved: saved, placeholder: 'sk-…', help: `Saved encrypted (${h(hub.connections.secrets?.label ?? 'secret store')}). Never shown again.` })}
-      ${hub.llm ? '<div data-widget="test-router" class="stack"><div class="row"><button type="button" class="btn secondary">Test it</button></div><div data-status class="hide"></div></div>' : ''}</div>`,
+      <label class="choice"><input type="checkbox" name="enabled" value="1"${hub.cfg.worker.enabled ? ' checked' : ''}><span class="grow"><b>Turn on the background worker</b><div class="muted small">Those chats go to Anthropic through your account. You can pick which ones and add more accounts in Settings.</div></span></label>
+      <p class="muted small mb0">Sign in once in Terminal: <code>claude auth login</code></p></div>`,
     skippable: true,
   };
 }

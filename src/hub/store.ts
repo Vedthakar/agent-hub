@@ -25,6 +25,8 @@ export interface EventRow {
   caused_by_task_id: number | null;
   hop: number;
   routed_at: Date | null;
+  /** What triage decided: memory, task, both, or just a log line. */
+  triage: 'memory' | 'task' | 'both' | 'log' | null;
   route_attempts: number;
   next_route_at: Date | null;
   last_error: string | null;
@@ -244,8 +246,8 @@ export class Store {
     return row;
   }
 
-  async updateEventAnalysis(id: number, summary: string, topics: string[]): Promise<void> {
-    await this.db.query('UPDATE events SET summary = $2, topics = $3, routed_at = now() WHERE id = $1', [id, summary, topics]);
+  async updateEventAnalysis(id: number, summary: string, topics: string[], triage: EventRow['triage'] = 'log'): Promise<void> {
+    await this.db.query('UPDATE events SET summary = $2, topics = $3, triage = $4, routed_at = now() WHERE id = $1', [id, summary, topics, triage]);
   }
 
   /** Events due for routing: not routed, not dead-lettered, and past any retry backoff. */
@@ -316,7 +318,7 @@ export class Store {
     if (s.slot) {
       await this.db.query(
         `UPDATE situation SET superseded_by = $1, superseded_at = now()
-         WHERE slot = $2 AND id <> $1 AND superseded_at IS NULL AND origin_event_id IS DISTINCT FROM $3::bigint`,
+         WHERE slot = $2 AND id <> $1 AND superseded_at IS NULL AND ($3::bigint IS NULL OR origin_event_id IS DISTINCT FROM $3::bigint)`,
         [row.id, s.slot, s.originEventId],
       );
     }
@@ -341,6 +343,22 @@ export class Store {
     await this.db.query(
       'INSERT INTO facts (text, kind, topics, source_agent, author, origin_event_id) VALUES ($1, $2, $3, $4, $5, $6)',
       [f.text, f.kind, f.topics, f.sourceAgent, f.author, f.originEventId],
+    );
+  }
+
+  async updateFactText(id: number, text: string): Promise<void> {
+    await this.db.query("UPDATE facts SET text = $2, author = 'user' WHERE id = $1 AND active", [id, text]);
+  }
+
+  async updateSituationText(id: number, text: string): Promise<void> {
+    await this.db.query("UPDATE situation SET text = $2, author = 'user' WHERE id = $1 AND superseded_at IS NULL", [id, text]);
+  }
+
+  /** Live now, or planned to become live. */
+  async currentAndUpcomingSituation(now = new Date()): Promise<SituationRow[]> {
+    return this.db.query(
+      'SELECT * FROM situation WHERE superseded_at IS NULL AND (expires_at IS NULL OR expires_at > $1) ORDER BY valid_from LIMIT 200',
+      [now],
     );
   }
 

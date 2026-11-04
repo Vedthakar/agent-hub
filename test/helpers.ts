@@ -1,11 +1,14 @@
 import { randomBytes } from 'node:crypto';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { loadConfig, type HubConfig } from '../src/hub/config.js';
 import { openDb, type Db } from '../src/hub/db.js';
 import { localSecretStore, type SecretStore } from '../src/hub/secrets.js';
 import { Hub } from '../src/hub/hub.js';
-import type { Llm } from '../src/hub/llm.js';
+import type { Worker } from '../src/hub/worker.js';
 import { createApp } from '../src/hub/server.js';
 import { Store } from '../src/hub/store.js';
 import { createTransports, type Transports } from '../src/hub/transports/index.js';
@@ -21,23 +24,23 @@ export const HANDLES = {
   approval: '+15559990000',
 };
 
-export interface FakeLlm extends Llm {
+export interface FakeWorker extends Worker {
   calls: { system: string; user: string }[];
   next: ((user: string) => unknown)[];
 }
 
 /** Returns queued responses in order; falls back to "summary only". */
-export function fakeLlm(): FakeLlm {
-  const llm: FakeLlm = {
+export function fakeWorker(): FakeWorker {
+  const worker: FakeWorker = {
     calls: [],
     next: [],
     async complete(system, user) {
-      llm.calls.push({ system, user });
-      const fn = llm.next.shift();
+      worker.calls.push({ system, user });
+      const fn = worker.next.shift();
       return JSON.stringify(fn ? fn(user) : { summary: 'Nothing notable.', topics: ['general'] });
     },
   };
-  return llm;
+  return worker;
 }
 
 export interface FakeEmail extends EmailTransport {
@@ -109,7 +112,7 @@ export const STANLEY_ENV = { TELEGRAM_API_ID: '1', TELEGRAM_API_HASH: 'x', TELEG
 
 export async function makeHub(
   env: Record<string, string> = {},
-  llm: Llm | null = fakeLlm(),
+  worker: Worker | null = fakeWorker(),
   overrides: Partial<Transports> = {},
   opts: { backend?: Backend; secrets?: (db: Db) => SecretStore | null } = {},
 ) {
@@ -122,6 +125,7 @@ export async function makeHub(
     APPROVAL_IMESSAGE_HANDLE: HANDLES.approval,
     HUB_TIMEZONE: 'America/New_York',
     ROUTER_DEBOUNCE_MS: '600000',
+    VAULT_PATH: mkdtempSync(path.join(tmpdir(), 'hub-vault-')),
     SMTP_URL: 'smtp://fake.invalid:25',
     EMAIL_FROM: 'ved@example.com',
     INSTINCT_EMAIL,
@@ -145,9 +149,9 @@ export async function makeHub(
   const sms = fakeSms();
   const transports: Transports = { ...createTransports(cfg, store), email, telegramUser: telegram, sms, telegramBot: null, imap: null, ...overrides };
   const secrets = opts.secrets ? opts.secrets(raw) : localSecretStore(raw, randomBytes(32));
-  const hub = new Hub(store, cfg, transports, llm, { secrets, env: fullEnv });
+  const hub = new Hub(store, cfg, transports, worker, { secrets, env: fullEnv });
   await hub.connections.load();
-  return { hub, store, cfg, db, llm: llm as FakeLlm, email, telegram, sms, transports, backend: which, databaseUrl: fresh?.url ?? null };
+  return { hub, store, cfg, db, worker: worker as FakeWorker, email, telegram, sms, transports, backend: which, databaseUrl: fresh?.url ?? null };
 }
 
 export async function serve(hub: Hub) {

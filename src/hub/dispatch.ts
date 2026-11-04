@@ -4,7 +4,7 @@ import type { AdapterContext, Delivery } from './adapters/types.js';
 import type { Approvals } from './approvals.js';
 import { compactContextFor } from './context.js';
 import { checkDelivery } from './guard.js';
-import { backoffMs } from './llm.js';
+import { backoffMs } from './backoff.js';
 import type { TaskRow } from './store.js';
 
 /**

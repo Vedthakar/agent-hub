@@ -4,7 +4,7 @@ import { log } from '../shared/log.js';
 import { CUSTOM_AGENT_ID, isAgentId, type AgentId, type CustomAgentId } from '../shared/types.js';
 import { registerCustomAgents } from './adapters/index.js';
 import type { CustomAgentDef } from './adapters/custom.js';
-import { defaultModel, type HubConfig } from './config.js';
+import { DEFAULT_WORKER_ACCOUNT, type HubConfig, type WorkerAccount } from './config.js';
 import { safeEqual } from './crypto.js';
 import { customDefaultScope } from './scopes.js';
 import type { SecretStore } from './secrets.js';
@@ -43,24 +43,15 @@ const FIELDS: Record<string, Field> = {
       if (c.approval.channel === 'none') c.approval.channel = 'imessage';
     }),
   },
-  'router.provider': field('ROUTER_PROVIDER', (c, v) => {
-    if (v !== 'anthropic' && v !== 'openai' && v !== 'ollama') return;
-    if (c.router.provider !== v) c.router.model = defaultModel(v);
-    c.router.provider = v;
+  'worker.enabled': field('WORKER_ENABLED', (c, v) => (c.worker.enabled = v === '1')),
+  'worker.accounts': field(null, (c, v) => {
+    const extra = JSON.parse(v) as WorkerAccount[];
+    c.worker.accounts = [DEFAULT_WORKER_ACCOUNT, ...extra.filter((a) => a.id !== DEFAULT_WORKER_ACCOUNT.id)];
   }),
-  'router.key': {
-    secret: true,
-    env: 'ANTHROPIC_API_KEY',
-    envSet: (e) => has(e, 'ANTHROPIC_API_KEY') || has(e, 'OPENAI_API_KEY'),
-    write: (c, v) => {
-      c.router.apiKey = v;
-      if (c.router.provider === 'none' || c.router.provider === 'ollama') {
-        c.router.provider = v.startsWith('sk-ant-') ? 'anthropic' : 'openai';
-        c.router.model = defaultModel(c.router.provider);
-      }
-      if (!c.router.model) c.router.model = defaultModel(c.router.provider);
-    },
-  },
+  'worker.account': field(null, (c, v) => (c.worker.activeAccount = v)),
+  'worker.sources': field('WORKER_SOURCES', (c, v) => (c.worker.sources = v.split(',').filter(Boolean))),
+  'worker.model': field('WORKER_MODEL', (c, v) => (c.worker.model = v)),
+  'vault.path': field('VAULT_PATH', (c, v) => (c.vaultPath = v)),
   'email.provider': field(null, () => undefined),
   'email.from': field('EMAIL_FROM', (c, v) => (c.email.from = v)),
   'email.smtp': field('SMTP_URL', (c, v) => (c.email.smtpUrl = v), true),
@@ -229,14 +220,13 @@ export class Connections {
       stanley: b.stanley,
     });
     Object.assign(c.approval, { channel: b.approval.channel, imessageHandle: b.approval.imessageHandle });
-    Object.assign(c.router, { provider: b.router.provider, apiKey: b.router.apiKey, model: b.router.model });
+    Object.assign(c.worker, b.worker);
+    c.vaultPath = b.vaultPath;
     Object.assign(c.email, b.email);
     Object.assign(c.imap, b.imap);
 
     const all = { ...this.values, ...this.secretValues };
-    // Provider before key, so the key's default provider only kicks in when none was chosen.
-    const order = Object.keys(all).sort((a, b) => (a === 'router.provider' ? -1 : b === 'router.provider' ? 1 : 0));
-    for (const key of order) {
+    for (const key of Object.keys(all)) {
       const f = fieldFor(key);
       if (!f || f.envSet(this.env)) continue;
       f.write(c, all[key]);

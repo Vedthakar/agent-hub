@@ -1,4 +1,4 @@
-import type { AgentId, Autonomy, BuiltinAgentId } from '../shared/types.js';
+import { TOPICS, type AgentId, type Autonomy, type BuiltinAgentId } from '../shared/types.js';
 
 export interface Scope {
   agent: AgentId;
@@ -46,4 +46,10 @@ export function canSee(scope: Scope | undefined, topics: string[]): boolean {
   if (tags.some((t) => deny.has(t))) return false;
   if (scope.allow_topics.includes('*')) return true;
   return tags.some((t) => scope.allow_topics.includes(t));
+}
+
+export function cleanTopics(topics: string[]): string[] {
+  const valid = new Set<string>(TOPICS);
+  const out = [...new Set(topics.map((t) => t.toLowerCase().trim()).filter((t) => valid.has(t)))];
+  return out.length ? out : ['general'];
 }

@@ -1,4 +1,4 @@
-import { backoffMs } from './llm.js';
+import { backoffMs } from './backoff.js';
 import type { Store } from './store.js';
 import type { InboundEmail } from './transports/imap.js';
 

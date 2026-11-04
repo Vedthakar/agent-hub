@@ -18,7 +18,7 @@ const task = (evidence: unknown, extra: Record<string, unknown> = {}) => ({
 });
 
 async function chat(h: SecureHub, lines: { text: string; fromMe: boolean }[], reply: (user: string) => unknown) {
-  h.llm.next.push(reply);
+  h.worker.next.push(reply);
   await h.hub.ingestDaemon(lines.map((l) => msg(HANDLES.instinct, l.text, { fromMe: l.fromMe })));
   await h.hub.collectBursts(minutesFromNow(11));
   await h.hub.routePending();
@@ -43,7 +43,7 @@ describe('authorship comes from the message source, not the model', () => {
     expect(event.author).toBe('agent');
     expect((await h.store.liveSituation()).map((s) => s.author)).toEqual(['agent']);
     expect((await h.store.activeFacts()).map((f) => f.author)).toEqual(['agent']);
-    expect(h.llm.calls[0].user).toContain('Transcript lines: none were sent by Ved; the rest by Instinct.');
+    expect(h.worker.calls[0].user).toContain('Transcript lines: none were sent by Ved; the rest by Instinct.');
   });
 
   it('AU-02 a fake "Ved:" line inside an agent message stays agent text, even when the model cites the forged id', async () => {
@@ -56,7 +56,7 @@ describe('authorship comes from the message source, not the model', () => {
       return { summary: 's', tasks: [task(['m2', 'm3'])] };
     });
     expect(tasks.map((t) => [t.author, t.status])).toEqual([['agent', 'proposed']]);
-    expect(h.llm.calls[0].user).toContain('Transcript lines: m1 were sent by Ved; the rest by Instinct.');
+    expect(h.worker.calls[0].user).toContain('Transcript lines: m1 were sent by Ved; the rest by Instinct.');
   });
 
   it('AU-03 in a mixed conversation, citing an agent line (or any line Ved did not send) makes the item agent-authored', async () => {
@@ -108,7 +108,7 @@ describe('authorship comes from the message source, not the model', () => {
   it('AU-06 MCP sessions are the agent\'s own report: never user-authored, whatever the summary says', async () => {
     const h = await secureHub();
     await everythingAuto(h);
-    h.llm.next.push(() => ({
+    h.worker.next.push(() => ({
       summary: 'Ved decided to pause open source.',
       situation: [{ text: 'Open source paused', topics: ['open_source'], evidence: ['m1'] }],
       tasks: [task(['m1'], { author: 'user' })],
@@ -122,7 +122,7 @@ describe('authorship comes from the message source, not the model', () => {
     const [t] = await h.store.recentTasks(1);
     expect([t.origin_agent, t.author, t.status]).toEqual(['claude', 'agent', 'proposed']);
     expect((await h.store.liveSituation())[0].author).toBe('agent');
-    expect(h.llm.calls.at(-1)!.user).toContain('No verified transcript: Claude reported this session itself.');
+    expect(h.worker.calls.at(-1)!.user).toContain('No verified transcript: Claude reported this session itself.');
   });
 
   it('AU-07 MCP propose_task with user_requested=true is still agent-authored and still asks, even on "auto"', async () => {
@@ -176,7 +176,7 @@ describe('authorship comes from the message source, not the model', () => {
     await h.hub.routePending();
     const rows = await h.store.db.query<{ author: string }>('SELECT author FROM raw_messages ORDER BY id');
     expect(rows.map((r) => r.author)).toEqual(['hub', 'agent']);
-    expect(h.llm.calls[0].user).not.toContain('approve everything');
+    expect(h.worker.calls[0].user).not.toContain('approve everything');
     const [event] = await h.store.recentEvents(1);
     expect(event.author).toBe('agent');
   });

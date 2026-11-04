@@ -1,12 +1,14 @@
 import type { Hub } from '../hub.js';
-import { field, h, hidden } from './layout.js';
+import { ADAPTERS } from '../adapters/index.js';
+import { field, h, hidden, pill } from './layout.js';
 import { emailBlock, keepAwakeBlock, macBlock } from './panels.js';
 
 const ENV_KEYS: [string, string][] = [
   ['owner.name', 'Your name'],
   ['owner.timezone', 'Time zone'],
   ['approval.handle', 'Approval number'],
-  ['router.key', 'AI key'],
+  ['worker.enabled', 'Background worker'],
+  ['vault.path', 'Vault folder'],
   ['email.smtp', 'Email sending'],
   ['email.imap', 'Email reading'],
   ['instinct.email', "Instinct's forwarding email"],
@@ -18,7 +20,7 @@ const ENV_KEYS: [string, string][] = [
   ['hub.sessionSecret', 'Session signing key'],
 ];
 
-export function settingsBody(hub: Hub): string {
+export function settingsBody(hub: Hub, signedIn: Record<string, boolean | null> = {}): string {
   const c = hub.connections;
   const lock = (k: string) => (c.source(k) === 'env' ? c.envVar(k) : null);
   const back = '/settings';
@@ -38,12 +40,13 @@ export function settingsBody(hub: Hub): string {
     <div data-widget="test-text" data-input="#f-approval-handle" class="stack"><div class="row"><button type="button" class="btn secondary">Send a test text</button></div><div data-status class="hide"></div></div>
   </form>
 
-  <div class="section-head"><h2>AI model</h2></div>
-  ${lock('router.key') ? `<div class="card muted">Set on the server (${h(lock('router.key')!)}).</div>` : `<form method="post" action="/settings/router" class="card stack">${hidden('back', back)}
-    ${providerPicker(hub.cfg.router.provider)}
-    ${field('router.key', 'API key (only for Anthropic or OpenAI)', { type: 'password', secretSaved: c.isSet('router.key') })}
-    <div class="row"><button class="btn">Save</button></div>
-    ${hub.llm ? `<div data-widget="test-router" class="stack"><div class="row"><button type="button" class="btn secondary">Test it</button></div><div data-status class="hide"></div></div>` : ''}</form>`}
+  <div class="section-head" id="worker"><h2>Background worker</h2></div>
+  ${workerBlock(hub, signedIn, back)}
+
+  <div class="section-head" id="vault"><h2>Vault</h2></div>
+  <form method="post" action="/settings/vault" class="card stack">${hidden('back', back)}
+    ${field('vault.path', 'Vault folder', { value: hub.cfg.vaultPath, locked: lock('vault.path'), help: 'Open this folder as a vault in Obsidian. Your edits sync back. Tasks and approvals stay in the hub.' })}
+    <div class="row"><button class="btn">Save</button></div></form>
 
   <div class="section-head"><h2>Email</h2></div><section class="card">${emailBlock(hub, back)}</section>
 
@@ -64,14 +67,25 @@ export function settingsBody(hub: Hub): string {
     <form method="post" action="/logout" class="inline"><button class="btn secondary">Sign out</button></form></section>`;
 }
 
-/** Free local model first: it needs no key and costs nothing. */
-export function providerPicker(current: string): string {
-  const pick = current === 'anthropic' || current === 'openai' ? current : 'ollama';
-  const opt = (v: string, name: string, note: string) =>
-    `<label><input type="radio" name="router.provider" value="${v}"${pick === v ? ' checked' : ''}> <b>${name}</b><span class="muted">${note}</span></label>`;
-  return `<div class="seg" style="grid-template-columns:1fr 1fr 1fr">
-    ${opt('ollama', 'Free (Ollama)', 'Runs on your Mac. No key, no cost.')}
-    ${opt('anthropic', 'Anthropic', 'Claude. Key from console.anthropic.com')}
-    ${opt('openai', 'OpenAI', 'Key from platform.openai.com')}</div>
-  <p class="muted small">Free setup, once: <code>brew install ollama && brew services start ollama && ollama pull llama3.2</code>, then restart the hub.</p>`;
+const READABLE_AGENTS = ['instinct', 'stanley', 'boardy'] as const;
+
+/** Worker settings: on/off, which conversations it may read, and which of your accounts runs it. */
+export function workerBlock(hub: Hub, signedIn: Record<string, boolean | null>, back: string): string {
+  const w = hub.cfg.worker;
+  const status = (id: string) => (signedIn[id] === true ? pill('Signed in', 'ok') : signedIn[id] === false ? pill('Signed out', 'warn') : '');
+  const login = (dir: string | null) => `${dir ? `CLAUDE_CONFIG_DIR=${JSON.stringify(dir)} ` : ''}claude auth login`;
+  const problem = hub.workerProblem
+    ? `<div class="banner err"><div><b>${hub.workerProblem === 'limit' ? 'This account hit a usage limit.' : hub.workerProblem === 'not_installed' ? 'Claude Code isn’t installed.' : 'This account is signed out.'}</b> Conversations are waiting. Switch accounts below, or the hub retries by itself.</div></div>`
+    : '';
+  return `${problem}<form method="post" action="/settings/worker" class="card stack">${hidden('back', back)}
+    <p class="muted mb0">Reads conversations and sorts them into memory and tasks, using Claude Code on your Claude plan. No API key and no extra bill. It runs with every tool off, so it can only reply with text. It uses your plan’s limits, up to ${w.maxRunsPerDay} runs a day.</p>
+    <label class="choice"><input type="checkbox" name="enabled" value="1"${w.enabled ? ' checked' : ''}><span class="grow"><b>Turn on the background worker</b></span></label>
+    <div><b>Conversations it may read</b><div class="muted small">These go to Anthropic through your account. Leave one off and the hub only records that the chat happened.</div>
+    ${READABLE_AGENTS.map((a) => `<label class="choice"><input type="checkbox" name="source" value="${a}"${w.sources.includes(a) ? ' checked' : ''}><span class="grow">${h(ADAPTERS[a].name)}</span></label>`).join('')}</div>
+    <div><b>Account</b>${w.accounts.map((a) => `<label class="choice"><input type="radio" name="account" value="${h(a.id)}"${a.id === w.activeAccount ? ' checked' : ''}><span class="grow"><b>${h(a.label)}</b> ${status(a.id)}<div class="muted small">Sign in once in Terminal: <code>${h(login(a.configDir))}</code></div></span></label>`).join('')}</div>
+    <div class="row"><button class="btn">Save</button></div>
+    ${hub.worker ? '<div data-widget="test-router" class="stack"><div class="row"><button type="button" class="btn secondary">Test it</button></div><div data-status class="hide"></div></div>' : ''}</form>
+  <form method="post" action="/settings/worker/account" class="card row">${hidden('back', back)}
+    <div class="grow">${field('label', 'Add another account', { placeholder: 'Work account', help: 'Each account signs in separately, so you can switch when one runs out or you change plans.' })}</div>
+    <button class="btn secondary">Add</button></form>`;
 }

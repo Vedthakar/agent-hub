@@ -38,7 +38,7 @@ flowchart LR
     chatdb[(chat.db<br/>read-only)] --> daemon[Daemon]
   end
   subgraph Hub["Hub server"]
-    ingest[Ingest + authorship] --> router[Router LLM<br/>nonce data blocks]
+    ingest[Ingest + authorship] --> router[Router: worker with no tools<br/>nonce data blocks]
     router --> guard1[Proposal guard<br/>hop limit, scopes]
     guard1 --> approvals[Approvals<br/>owner + code]
     approvals --> guard2[Delivery guard<br/>scopes + hard floor + pause]
@@ -277,8 +277,8 @@ turn and checks that it is caught (15/15).
    static tokens if one leaks.
 7. **Email From spoofing.** Mail claiming to be from boardy@boardy.ai is ingested as Boardy content. It
    can only produce agent-authored, approval-gated output, but it can add misleading context.
-8. **Cost.** Each quiet conversation burst costs one LLM call. A chatty or hostile agent can raise the
-   bill. The debounce window and the MCP rate limits bound it, but there is no daily budget yet (step 5).
+8. **Cost.** Each quiet conversation burst costs one worker run against your plan's limits, capped per day (`WORKER_MAX_RUNS_PER_DAY`). A chatty or hostile agent can use
+   up plan limits. The daily cap, the debounce window and the MCP rate limits bound it.
 9. **Server compromise.** `DATABASE_URL` and the transport credentials live in the server environment.
    Whoever controls the server controls the hub.
 10. **SQLite sidecar files.** The read-only daemon still touches chat.db's `-shm` index (all WAL readers

@@ -15,7 +15,7 @@ import { createMcpServer } from './mcp.js';
 import { HubOAuthProvider } from './oauth.js';
 import { verifyTwilio } from './transports/sms.js';
 import { signWebhook } from './adapters/grok.js';
-import { inbox, logSession, propose, updateTask } from './agentApi.js';
+import { inbox, logSession, propose, retireMemory, saveMemory, setSituation, updateTask } from './agentApi.js';
 import { renderSituation, situationFor } from './context.js';
 import type { HubConfig } from './config.js';
 import { TOPICS, type AgentId } from '../shared/types.js';
@@ -51,6 +51,16 @@ const HookBody = z.discriminatedUnion('type', [
     task_code: z.string().max(16).optional(),
   }),
   z.object({ type: z.literal('inbox') }),
+  z.object({
+    type: z.literal('set_situation'),
+    text: z.string().min(1).max(500),
+    topics: z.array(z.enum(TOPICS)).min(1),
+    expires_at: z.string().max(40).optional(),
+    valid_from: z.string().max(40).optional(),
+    slot: z.string().max(80).optional(),
+  }),
+  z.object({ type: z.literal('save_memory'), text: z.string().min(1).max(500), kind: z.enum(['goal', 'preference', 'fact']), topics: z.array(z.enum(TOPICS)).min(1) }),
+  z.object({ type: z.literal('retire_memory'), id: z.number().int().positive() }),
   z.object({
     type: z.literal('propose'),
     target_agent: z.string().max(40),
@@ -346,6 +356,15 @@ export function createApp(hub: Hub): express.Express {
         res.json({ tasks: tasks.map((t) => ({ code: t.code, from: t.origin_agent, payload: t.payload })) });
         return;
       }
+      case 'set_situation':
+        res.json(await setSituation(hub, agent, call));
+        return;
+      case 'save_memory':
+        res.json(await saveMemory(hub, agent, call));
+        return;
+      case 'retire_memory':
+        res.json(await retireMemory(hub, agent, call.id));
+        return;
       case 'propose':
         res.status(200).json(await propose(hub, agent, call));
         return;

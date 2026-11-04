@@ -102,11 +102,11 @@ describe('delivery: retries, backoff, dead-letter queue, delivery-layer guard', 
 });
 
 describe('router: persistent retries and dead-letter queue', () => {
-  it('malformed LLM output is retried with backoff and then dead-lettered, without blocking other events', async () => {
-    const { hub, store, llm } = await setup();
+  it('malformed worker output is retried with backoff and then dead-lettered, without blocking other events', async () => {
+    const { hub, store, worker } = await setup();
     const bad = await store.insertEvent({ agent: 'claude', occurredAt: new Date(), author: 'user', rawExcerpt: 'x', summary: '', topics: [], kind: 'session' });
     let calls = 0;
-    llm.complete = async () => (++calls <= 3 ? 'Sorry, I cannot help with that.' : JSON.stringify({ summary: 'ok', topics: ['general'] }));
+    worker.complete = async () => (++calls <= 3 ? 'Sorry, I cannot help with that.' : JSON.stringify({ summary: 'ok', topics: ['general'] }));
     const far = (n: number) => new Date(Date.now() + n * 3600_000);
     await hub.routePending();
     expect((await store.db.query<{ route_attempts: number }>('SELECT route_attempts FROM events WHERE id = $1', [bad.id]))[0].route_attempts).toBe(1);
@@ -114,7 +114,7 @@ describe('router: persistent retries and dead-letter queue', () => {
     await hub.routePending(far(2));
     const [ev] = await store.db.query<{ dead_lettered_at: Date | null; last_error: string }>('SELECT dead_lettered_at, last_error FROM events WHERE id = $1', [bad.id]);
     expect(ev.dead_lettered_at).toBeTruthy();
-    expect(ev.last_error).toBe('no JSON object in model reply');
+    expect(ev.last_error).toBe('no JSON object in worker reply');
     expect((await store.openDeadLetters())[0].kind).toBe('route');
 
     const good = await store.insertEvent({ agent: 'gemini', occurredAt: new Date(), author: 'user', rawExcerpt: 'y', summary: '', topics: [], kind: 'session' });

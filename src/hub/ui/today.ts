@@ -1,4 +1,4 @@
-import { isAgentId, type AgentId } from '../../shared/types.js';
+import { agentIds, isAgentId, type AgentId } from '../../shared/types.js';
 import { ADAPTERS } from '../adapters/index.js';
 import type { Hub } from '../hub.js';
 import type { EventRow } from '../store.js';
@@ -7,7 +7,7 @@ import { metaFor } from './agents.js';
 import { avatar, h, pill, relTime } from './layout.js';
 import { STATE_LABEL, STATE_TONE, agentCards, macStatus } from './status.js';
 
-const nameOf = (a: string) => (isAgentId(a) ? ADAPTERS[a].name : a);
+const nameOf = (a: string) => (isAgentId(a) ? ADAPTERS[a].name : a === 'owner' ? 'You' : a);
 const chip = (a: string, size = 28) => avatar(nameOf(a), metaFor(a as AgentId).color, size);
 
 function greeting(hub: Hub): string {
@@ -52,7 +52,7 @@ export async function todayFragment(hub: Hub): Promise<string> {
     ? `<ul class="list">${situation.map((s) => `<li>${chip(s.source_agent, 26)}<div class="grow">${h(s.text)}${s.upcoming ? ` ${pill('upcoming', 'accent')}` : ''}
         <div class="muted small">${s.upcoming ? `from ${h(t(s.valid_from))} · ` : ''}until ${h(t(s.expires_at))}</div></div>
         <form method="post" action="/actions/situation/${s.id}/expire" class="inline"><button class="btn ghost sm" title="Clear this">Clear</button></form></li>`).join('')}</ul>`
-    : '<p class="muted mb0">Nothing yet. As you talk to your agents, what you’re up to shows up here.</p>';
+    : '<p class="muted mb0">Nothing yet. Tell your agents something above, or it shows up here as they save it.</p>';
 
   const byAgent = new Map<string, EventRow[]>();
   for (const e of events) byAgent.set(e.agent, [...(byAgent.get(e.agent) ?? []), e]);
@@ -88,8 +88,16 @@ export async function todayFragment(hub: Hub): Promise<string> {
   </div>`;
 }
 
+function tellForm(): string {
+  const targets = agentIds().filter((a) => ADAPTERS[a].capabilities.canReceiveTasks).map((a) => `<option value="${h(a)}">Send to ${h(ADAPTERS[a].name)}</option>`).join('');
+  return `<form method="post" action="/actions/tell" class="card row" style="margin-bottom:18px">
+    <select name="kind" style="width:auto" aria-label="What this is"><option value="now">Right now</option><option value="today">Today</option><option value="tomorrow">Tomorrow</option><option value="goal">Goal</option>${targets}</select>
+    <input class="grow" name="text" required maxlength="500" placeholder="Tell your agents once, e.g. starting a coding assessment until 22:00" aria-label="What to tell your agents">
+    <button class="btn">Tell them</button></form>`;
+}
+
 export async function todayBody(hub: Hub): Promise<string> {
   const ob = hub.connections.onboarding;
   const banner = ob.completed ? '' : `<div class="banner"><div><b>Finish setting up.</b> A few steps connect your Mac and agents.</div><a class="btn" href="/onboarding">Continue setup</a></div>`;
-  return `${banner}<div id="today" data-widget="today-refresh">${await todayFragment(hub)}</div>`;
+  return `${banner}${tellForm()}<div id="today" data-widget="today-refresh">${await todayFragment(hub)}</div>`;
 }
