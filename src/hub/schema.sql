@@ -249,6 +249,31 @@ CREATE TABLE IF NOT EXISTS daemon_jobs (
 );
 CREATE INDEX IF NOT EXISTS daemon_jobs_pending ON daemon_jobs (status, created_at);
 
+ALTER TABLE daemon_jobs DROP CONSTRAINT IF EXISTS daemon_jobs_kind_check;
+ALTER TABLE daemon_jobs ADD CONSTRAINT daemon_jobs_kind_check CHECK (kind IN ('list-threads', 'keep-awake', 'open-settings', 'read-history'));
+
+-- Past conversations imported in bulk. History only: never current state and never a source of tasks.
+CREATE TABLE IF NOT EXISTS archive (
+  id           BIGSERIAL PRIMARY KEY,
+  source       TEXT NOT NULL,
+  external_id  TEXT NOT NULL,
+  title        TEXT NOT NULL,
+  messages     JSONB NOT NULL,
+  hash         TEXT NOT NULL,
+  started_at   TIMESTAMPTZ,
+  updated_at   TIMESTAMPTZ,
+  folder       TEXT,
+  topics       TEXT[] NOT NULL DEFAULT '{general}',
+  summary      TEXT,
+  vault_path   TEXT,
+  needs_write  BOOLEAN NOT NULL DEFAULT true,
+  sorted_at    TIMESTAMPTZ,
+  sort_attempts INT NOT NULL DEFAULT 0,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (source, external_id)
+);
+CREATE INDEX IF NOT EXISTS archive_unsorted ON archive (id) WHERE sorted_at IS NULL;
+
 -- ---------- Row-level security ----------
 -- The hub connects as the table owner and bypasses RLS. Supabase exposes the public schema to the
 -- `anon` / `authenticated` roles through PostgREST, so every table gets RLS with no policies (deny all)
@@ -257,7 +282,7 @@ DO $$
 DECLARE t TEXT;
 BEGIN
   FOREACH t IN ARRAY ARRAY['raw_messages','events','situation','facts','tasks','scopes','outbox','agent_status',
-    'audit','settings','oauth_clients','oauth_codes','oauth_tokens','dead_letters','inbound_commands','routes','secrets','daemon_jobs'] LOOP
+    'audit','settings','oauth_clients','oauth_codes','oauth_tokens','dead_letters','inbound_commands','routes','secrets','daemon_jobs','archive'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
       EXECUTE format('REVOKE ALL ON TABLE %I FROM anon', t);

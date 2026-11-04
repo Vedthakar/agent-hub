@@ -307,7 +307,7 @@ describe('MCP over OAuth (how Claude / ChatGPT / Gemini connect)', () => {
 
     const c = await mcp(url, tokens.access_token);
     const tools = (await c.client.listTools()).tools.map((t) => t.name).sort();
-    expect(tools).toEqual(['get_inbox', 'get_situation', 'log_session', 'propose_task', 'retire_memory', 'save_memory', 'set_situation', 'update_task']);
+    expect(tools).toEqual(['get_inbox', 'get_situation', 'log_session', 'propose_task', 'read_old_chat', 'retire_memory', 'save_memory', 'search_history', 'set_situation', 'update_task']);
     expect(await c.call('get_situation')).toContain('CURRENT SITUATION');
     expect((await store.agentStatuses()).get('claude')?.last_read_at).toBeTruthy();
 

@@ -10,6 +10,7 @@ const cfg = (over: Partial<HubConfig['worker']> = {}): HubConfig['worker'] => ({
   sources: [],
   model: 'haiku',
   maxRunsPerDay: 10,
+  importRunsPerDay: 10,
   bin: 'claude',
   ...over,
 });

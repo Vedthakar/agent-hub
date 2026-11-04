@@ -456,7 +456,8 @@ export function dashboardRouter(hub: Hub): Router {
 
   r.get('/settings', requireOwner, async (req, res) => {
     const signedIn = Object.fromEntries(await Promise.all(cfg.worker.accounts.map(async (a) => [a.id, await accountSignedIn(cfg.worker, a)] as const)));
-    send(res, 'Settings', settingsBody(hub, signedIn), { nav: 'settings', ...flashOf(req) });
+    const imports = { status: await hub.importer.status(), history: await store.getSetting<{ state: string; error?: string } | null>('import.history', null) };
+    send(res, 'Settings', settingsBody(hub, signedIn, imports), { nav: 'settings', ...flashOf(req) });
   });
   r.post('/settings/profile', requireOwner, async (req, res) => {
     const patch: Record<string, string | null> = {};
@@ -493,6 +494,14 @@ export function dashboardRouter(hub: Hub): Router {
     const result = await save(patch);
     await store.audit('owner', 'worker.account_removed', { id });
     go(res, '/settings', result === 'ok' ? { ok: 'saved' } : { err: result });
+  });
+  r.post('/settings/import/history', requireOwner, async (_req, res) => {
+    const handles = (['instinct', 'stanley', 'boardy'] as const).map((a) => cfg.imessageHandles[a]).filter((x): x is string => Boolean(x));
+    if (!handles.length) return go(res, '/settings', { err: 'invalid' });
+    await store.setSetting('import.history', { state: 'reading' });
+    await store.enqueueJob('read-history', { handles, afterRowId: 0 });
+    await store.audit('owner', 'import.history_started', {});
+    res.redirect(303, '/settings#import');
   });
   r.post('/settings/vault', requireOwner, async (req, res) => {
     const dir = String(req.body['vault.path'] ?? '').trim();

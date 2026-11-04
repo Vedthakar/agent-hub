@@ -7,6 +7,7 @@ import type { HubConfig } from './config.js';
 import { debriefActive, noteDebriefStart, processPendingDebrief, queueDigestNow } from './debrief.js';
 import { dispatchApproved } from './dispatch.js';
 import { backoffMs } from './backoff.js';
+import { Importer } from './importer.js';
 import { VaultSync } from './vault.js';
 import { WorkerError, WorkerUnavailable, type Worker } from './worker.js';
 import { routeEvent } from './router.js';
@@ -50,6 +51,7 @@ export class Hub {
   private rerun = false;
   private routing: Promise<number> = Promise.resolve(0);
   readonly vault: VaultSync;
+  readonly importer: Importer;
   /** Set when the worker's account can't run; events wait instead of burning retries. */
   workerPausedUntil = 0;
   workerProblem: string | null = null;
@@ -72,6 +74,7 @@ export class Hub {
     this.approvals = new Approvals({ store, cfg, transports, kick: () => this.kick() });
     this.connections = new Connections(store, opts.secrets ?? null, cfg, opts.env ?? {});
     this.connections.onChange = () => this.reconfigure();
+    this.importer = new Importer(this);
     this.vault = new VaultSync(store, cfg, (text) => this.approvals.ownerCommand(text, 'vault'));
   }
 
@@ -101,7 +104,7 @@ export class Hub {
     return { watchHandles: [...handles], approvalHandle, pollIntervalMs: 5000, paused };
   }
 
-  private agentForHandle(handle: string): AgentId | null {
+  agentForHandle(handle: string): AgentId | null {
     const n = normalizeHandle(handle);
     for (const [agent, h] of Object.entries(this.cfg.imessageHandles)) {
       if (h && normalizeHandle(h) === n) return agent as AgentId;
@@ -219,7 +222,7 @@ export class Hub {
     return true;
   }
 
-  private async workerUnavailable(err: WorkerUnavailable, now: Date): Promise<void> {
+  async workerUnavailable(err: WorkerUnavailable, now: Date): Promise<void> {
     this.workerPausedUntil = now.getTime() + (err.retryAfterMs ?? 30 * 60_000);
     const changed = this.workerProblem !== err.reason;
     this.workerProblem = err.reason;
@@ -331,6 +334,7 @@ export class Hub {
             report.asked = await this.requestApprovals();
             report.sent = await this.dispatchApproved();
             await this.vault.sync();
+            this.importer.kick();
             this.lastTick = { at: new Date(), ok: true, report };
           } catch (err) {
             this.lastTick = { at: new Date(), ok: false, error: String(err), report };
@@ -348,6 +352,7 @@ export class Hub {
   async idle(): Promise<void> {
     await new Promise((r) => setImmediate(r));
     while (this.ticking) await this.ticking.catch(() => undefined);
+    await this.importer.idle();
   }
 
   /** Run a tick soon (after MCP writes) instead of waiting for the next interval. */

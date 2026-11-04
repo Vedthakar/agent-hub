@@ -84,7 +84,7 @@ The default is ask-first. Per-route `notify` and `auto` exist for hand-offs take
 | Stanley | iMessage read, Telegram read and write | Daemon reads iMessage; adapter polls Telegram / tasks on Telegram | A separate Telegram chat. Context rides with the task. There is no digest. Content and shoots. |
 | Boardy | iMessage read, email write, IMAP read | Daemon and inbox replies / email brief | Sends to `boardy@boardy.ai`. Professional and networking only. |
 
-MCP tools are `get_situation`, `set_situation`, `save_memory`, `retire_memory`, `log_session`, `get_inbox`, `propose_task`, and `update_task`. Each OAuth connection is bound to one agent.
+MCP tools are `get_situation`, `set_situation`, `save_memory`, `retire_memory`, `search_history`, `read_old_chat`, `log_session`, `get_inbox`, `propose_task`, and `update_task`. Each OAuth connection is bound to one agent.
 
 ## How it works
 
@@ -120,7 +120,15 @@ stanley: write a script for the shoot
 
 A hand-off you type is your approval, so it goes straight out, except over SMS, where caller ID can be spoofed. `#topic` decides who may see it. Untagged items reach only agents with access to everything.
 
-**Vault.** Open the vault folder (`VAULT_PATH`, default `.data/vault`, also in Settings) in Obsidian. `Memory/` holds one note per goal, preference, fact, and situation item. Edit a note and agents see the new text; delete it and it's retired. Drop a note in `Inbox/` and the hub files it. `Log/` has a line for each thing an agent did, and `Tasks.md` is a read-only view. Tasks, approvals, and permissions stay in the database, so editing a file can never approve anything. Agents reach memory only through the hub's tools, so their topic limits still apply.
+**Importing your old chats.** New chats save as they go, but old chats can't call tools, so **Settings → Import your old chats** brings them in once:
+
+- **Claude and ChatGPT:** export from the app, then move the zip into `Import/` in your vault. Every chat is filed under `Library/` right away, with no AI and no tokens. A newer export only adds what changed.
+- **Instinct and Stanley:** one button reads the older messages in those iMessage threads from your Mac, with no export. Each day becomes one note.
+- **Sorting:** the worker sorts chats into folders like `Library/Job Search/Stripe application` in batches of 40, reading only the title and first message, up to `IMPORT_MAX_RUNS_PER_DAY` batches a day. The folder sets which agents can see a chat. It can guess wrong, so move a note if it's in the wrong place.
+- **Using them:** agents find old chats with `search_history` and `read_old_chat`, limited by the same topic rules. Imported chats never become tasks or current state, and they stay out of `get_situation`, so they don't slow down new chats.
+- **Quick start:** a prompt you can paste into Claude or ChatGPT saves your main goals and preferences right away, using that app's own search. It won't find everything.
+
+**Vault.** Open the vault folder (`VAULT_PATH`, default `.data/vault`, also in Settings) in Obsidian. `Memory/` holds one note per goal, preference, fact, and situation item. Edit a note and agents see the new text; delete it and it's retired. Drop a note in `Inbox/` and the hub files it. `Library/` holds imported chats, `Log/` has a line for each thing an agent did, and `Tasks.md` is a read-only view. Tasks, approvals, and permissions stay in the database, so editing a file can never approve anything. Agents reach memory only through the hub's tools, so their topic limits still apply.
 
 **Situation.** This is short-lived state: what you are doing now, a plan, a temporary pause. Each item expires. If the model leaves the expiry off, the hub keeps it for 24 hours. A slot name (`now:activity`, `plan:2026-11-02`, `pause:open_source`) means a newer item replaces the older one. Tomorrow's plan can stay hidden until morning via `valid_from`. Goals and preferences are separate, and they stay until a later conversation retires them. You can clear a situation item on the dashboard.
 
@@ -279,6 +287,9 @@ Agent Hub borrows from these open-source projects. Thanks to their authors.
 | [obsidian-second-brain](https://github.com/eugeniughelbur/obsidian-second-brain) | MIT | Idea only: Crew's one-line-per-job logbook inspired `Log/`. No code copied. |
 | [agent-second-brain](https://github.com/smixs/agent-second-brain) | MIT | Idea only: a second brain running on a Claude plan you already have. No code copied. |
 | [LifeOS](https://github.com/nbramia/LifeOS) | GPL-3.0 | Idea only: sending one person's work to different engines, with a human queue. No code copied. |
+| [ChatGPT_Conversations_To_Markdown](https://github.com/daugaard47/ChatGPT_Conversations_To_Markdown) | MIT | Idea only: one Markdown note per exported chat. No code copied. |
+| [fflate](https://github.com/101arrowz/fflate) | MIT | Library: reads export zips without loading their attachments. |
+| [yaml](https://github.com/eemeli/yaml) | ISC | Library: note frontmatter. |
 
 ## Disclaimer
 

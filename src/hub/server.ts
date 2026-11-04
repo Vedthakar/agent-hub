@@ -18,7 +18,8 @@ import { signWebhook } from './adapters/grok.js';
 import { inbox, logSession, propose, retireMemory, saveMemory, setSituation, updateTask } from './agentApi.js';
 import { renderSituation, situationFor } from './context.js';
 import type { HubConfig } from './config.js';
-import { TOPICS, type AgentId } from '../shared/types.js';
+import { TOPICS, type AgentId, type DaemonMessage } from '../shared/types.js';
+import type { DaemonJobRow } from './store.js';
 
 export interface DaemonHeartbeat {
   at: string;
@@ -37,6 +38,27 @@ const HOOK_SKEW_S = 300;
 /** The secret an agent's /hooks/<agent> calls are signed with (the same one signs the hub's nudges to it). */
 export function hookSecret(cfg: HubConfig, agent: AgentId): string | null {
   return agent === 'grok' ? cfg.grokWebhookSecret : (cfg.agentWebhooks[agent]?.secret ?? null);
+}
+
+/** History pages go straight into the archive and the next page is queued. Message text is never kept on the job. */
+const HistoryPage = z.object({ messages: z.array(z.object({ guid: z.string(), rowid: z.number(), handle: z.string(), isFromMe: z.boolean(), text: z.string().nullable(), sentAt: z.string() }).passthrough()), scannedTo: z.number(), done: z.boolean() });
+async function finishHistoryJob(hub: Hub, job: DaemonJobRow, ok: boolean, body: { result?: unknown; error?: unknown }): Promise<void> {
+  const page = ok ? HistoryPage.safeParse(body.result) : null;
+  if (!page?.success) {
+    await hub.store.finishJob(job.id, false, null, String(body.error ?? 'bad history page').slice(0, 500));
+    await hub.store.setSetting('import.history', { state: 'failed', error: String(body.error ?? 'bad history page').slice(0, 200) });
+    return;
+  }
+  await hub.importer.addHistory(page.data.messages as unknown as DaemonMessage[], (handle) => hub.agentForHandle(handle));
+  await hub.store.finishJob(job.id, true, null, null);
+  if (page.data.done) {
+    await hub.store.setSetting('import.history', { state: 'done' });
+    await hub.store.audit('hub', 'import.history_done', {});
+  } else {
+    await hub.store.setSetting('import.history', { state: 'reading' });
+    await hub.store.enqueueJob('read-history', { ...job.args, afterRowId: page.data.scannedTo });
+  }
+  hub.kick();
 }
 
 const Topics = z.array(z.enum(TOPICS)).optional();
@@ -275,6 +297,12 @@ export function createApp(hub: Hub): express.Express {
       return;
     }
     const ok = req.body?.ok === true;
+    const claimed = await store.job(id);
+    if (claimed?.kind === 'read-history') {
+      await finishHistoryJob(hub, claimed, ok, req.body);
+      res.json({ ok: true });
+      return;
+    }
     const row = await store.finishJob(id, ok, ok ? (req.body?.result ?? null) : null, ok ? null : String(req.body?.error ?? 'unknown').slice(0, 500));
     res.json({ ok: Boolean(row) });
   });

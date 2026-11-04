@@ -35,7 +35,7 @@ export interface HeartbeatBody {
 
 export interface DaemonJob {
   id: number;
-  kind: 'list-threads' | 'keep-awake' | 'open-settings';
+  kind: 'list-threads' | 'keep-awake' | 'open-settings' | 'read-history';
   args: Record<string, unknown>;
 }
 
@@ -328,6 +328,15 @@ export class Daemon {
         this.fullDiskAccess = true;
         const days = Math.min(Math.max(Number(job.args.days ?? 30), 1), 90);
         return { threads: this.db.recentThreads(new Date(this.now() - days * 86_400_000), 30) };
+      }
+      case 'read-history': {
+        // Your older messages, a page at a time. Only the threads the hub names, and it only ever reads.
+        this.db ??= this.open();
+        this.fullDiskAccess = true;
+        const watch = new Set((job.args.handles as string[]).map(normalizeHandle));
+        const after = Number(job.args.afterRowId ?? 0);
+        const { messages, scannedTo } = this.db.readSince(after, watch, 500);
+        return { messages, scannedTo, done: scannedTo === after };
       }
       case 'keep-awake': {
         if (!this.o.mac) throw new Error('keep-awake is only available on macOS');

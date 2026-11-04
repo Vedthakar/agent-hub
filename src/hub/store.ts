@@ -730,6 +730,75 @@ export class Store {
     return rows[0];
   }
 
+  // ---------- imported history ----------
+
+  /** Returns true if this is new or changed. Unchanged chats keep their folder and cost nothing. */
+  async upsertArchive(a: { source: string; externalId: string; title: string; messages: ArchiveMessage[]; hash: string; startedAt: Date | null; updatedAt: Date | null }): Promise<boolean> {
+    const rows = await this.db.query(
+      `INSERT INTO archive (source, external_id, title, messages, hash, started_at, updated_at)
+       VALUES ($1, $2, $3, $4::text::jsonb, $5, $6, $7)
+       ON CONFLICT (source, external_id) DO UPDATE
+         SET title = EXCLUDED.title, messages = EXCLUDED.messages, hash = EXCLUDED.hash, updated_at = EXCLUDED.updated_at, needs_write = true
+         WHERE archive.hash <> EXCLUDED.hash
+       RETURNING id`,
+      [a.source, a.externalId, a.title, toJson(a.messages), a.hash, a.startedAt, a.updatedAt],
+    );
+    return rows.length > 0;
+  }
+
+  async archiveByKey(source: string, externalId: string): Promise<ArchiveRow | undefined> {
+    const rows = await this.db.query<ArchiveRow>('SELECT * FROM archive WHERE source = $1 AND external_id = $2', [source, externalId]);
+    return rows[0];
+  }
+
+  async archiveById(id: number): Promise<ArchiveRow | undefined> {
+    const rows = await this.db.query<ArchiveRow>('SELECT * FROM archive WHERE id = $1', [id]);
+    return rows[0];
+  }
+
+  archiveToWrite(limit: number): Promise<ArchiveRow[]> {
+    return this.db.query('SELECT * FROM archive WHERE needs_write ORDER BY id LIMIT $1', [limit]);
+  }
+
+  async markArchiveWritten(id: number, vaultPath: string): Promise<void> {
+    await this.db.query('UPDATE archive SET vault_path = $2, needs_write = false WHERE id = $1', [id, vaultPath]);
+  }
+
+  /** Oldest first, and a chat that keeps failing to sort stops being retried after a few tries. */
+  archiveToSort(limit: number): Promise<ArchiveRow[]> {
+    return this.db.query('SELECT * FROM archive WHERE sorted_at IS NULL AND sort_attempts < 3 ORDER BY id LIMIT $1', [limit]);
+  }
+
+  async markArchiveSorted(id: number, folder: string, topics: string[], summary: string): Promise<void> {
+    await this.db.query('UPDATE archive SET folder = $2, topics = $3, summary = $4, sorted_at = now(), needs_write = true WHERE id = $1', [id, folder, topics, summary]);
+  }
+
+  async bumpArchiveAttempts(ids: number[]): Promise<void> {
+    if (ids.length) await this.db.query('UPDATE archive SET sort_attempts = sort_attempts + 1 WHERE id = ANY($1::bigint[])', [ids]);
+  }
+
+  async archiveFolders(limit = 80): Promise<string[]> {
+    const rows = await this.db.query<{ folder: string }>('SELECT folder FROM archive WHERE folder IS NOT NULL GROUP BY folder ORDER BY count(*) DESC LIMIT $1', [limit]);
+    return rows.map((r) => r.folder);
+  }
+
+  archiveCounts(): Promise<{ source: string; total: number; sorted: number }[]> {
+    return this.db.query(`SELECT source, count(*)::int AS total, count(sorted_at)::int AS sorted FROM archive GROUP BY source ORDER BY source`);
+  }
+
+  /** Every word must appear somewhere. Parameters are bound and wildcards escaped. */
+  searchArchive(query: string, limit = 200): Promise<ArchiveRow[]> {
+    const words = query.split(/\s+/).filter(Boolean).slice(0, 8).map((w) => `%${w.replace(/[\\%_]/g, '\\$&')}%`);
+    if (!words.length) return Promise.resolve([]);
+    return this.db.query(
+      `SELECT * FROM archive a WHERE NOT EXISTS (
+         SELECT 1 FROM unnest($2::text[]) AS w
+         WHERE NOT (a.title ILIKE w OR COALESCE(a.summary, '') ILIKE w OR COALESCE(a.folder, '') ILIKE w OR a.messages::text ILIKE w)
+       ) ORDER BY a.started_at DESC NULLS LAST LIMIT $1`,
+      [limit, words],
+    );
+  }
+
   // ---------- daemon jobs ----------
 
   async enqueueJob(kind: DaemonJobRow['kind'], args: Record<string, unknown> = {}): Promise<DaemonJobRow> {
@@ -771,9 +840,34 @@ export class Store {
   }
 }
 
+export interface ArchiveMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  at: string | null;
+}
+
+export interface ArchiveRow {
+  id: number;
+  source: string;
+  external_id: string;
+  title: string;
+  messages: ArchiveMessage[];
+  hash: string;
+  started_at: Date | null;
+  updated_at: Date | null;
+  folder: string | null;
+  topics: string[];
+  summary: string | null;
+  vault_path: string | null;
+  needs_write: boolean;
+  sorted_at: Date | null;
+  sort_attempts: number;
+}
+
 export interface DaemonJobRow {
   id: number;
-  kind: 'list-threads' | 'keep-awake' | 'open-settings';
+  kind: 'list-threads' | 'keep-awake' | 'open-settings' | 'read-history';
   args: Record<string, unknown>;
   status: 'pending' | 'claimed' | 'done' | 'failed';
   result: unknown;

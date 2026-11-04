@@ -79,6 +79,8 @@ export interface HubConfig {
     sources: string[];
     model: string;
     maxRunsPerDay: number;
+    /** Separate from maxRunsPerDay, so a big import can't crowd out live conversations. */
+    importRunsPerDay: number;
     bin: string | null;
   };
   /** The Obsidian vault the hub keeps its memory notes in. */
@@ -171,6 +173,7 @@ export function loadConfig(env = process.env): HubConfig {
       sources: (env.WORKER_SOURCES ?? 'instinct,stanley,boardy').split(',').map((s) => s.trim()).filter(Boolean),
       model: env.WORKER_MODEL ?? 'haiku',
       maxRunsPerDay: int(env, 'WORKER_MAX_RUNS_PER_DAY', 50),
+      importRunsPerDay: int(env, 'IMPORT_MAX_RUNS_PER_DAY', 30),
       bin: env.WORKER_CLAUDE_BIN ?? null,
     },
     vaultPath: env.VAULT_PATH ?? path.resolve(path.dirname(env.PGLITE_DIR ?? '.data/pglite'), 'vault'),
