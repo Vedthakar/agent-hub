@@ -15,9 +15,9 @@ trap 'kill "$NGROK" 2>/dev/null || true' EXIT
 
 URL=""
 for _ in $(seq 1 30); do
-  URL="$(curl -fsS http://127.0.0.1:4040/api/tunnels 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const t=JSON.parse(s).tunnels.find(t=>t.public_url.startsWith("https://"));console.log(t?t.public_url:"")})' || true)"
+  URL="$(curl -fsS http://127.0.0.1:4040/api/tunnels 2>/dev/null | grep -o 'https://[^"]*' | head -1 || true)"
   [[ -n "$URL" ]] && break
-  kill -0 "$NGROK" 2>/dev/null || { echo "ngrok stopped. Run 'ngrok http $PORT' to see why."; exit 1; }
+  kill -0 "$NGROK" 2>/dev/null || { echo "ngrok stopped (see the error above). If it says the version is too old, run: ngrok update"; exit 1; }
   sleep 1
 done
 [[ -n "$URL" ]] || { echo "ngrok didn't report an address in time."; exit 1; }
