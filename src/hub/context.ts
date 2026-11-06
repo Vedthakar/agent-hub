@@ -18,7 +18,7 @@ export interface SituationView {
   agent: AgentId;
   generatedAt: string;
   situation: { id: number; text: string; slot: string | null; from: string; provenance: string; expiresAt: string | null }[];
-  facts: { id: number; kind: string; text: string; from: string; provenance: string }[];
+  facts: { id: number; kind: string; text: string; from: string; provenance: string; savedAt: string }[];
   recentActivity: { at: string; agent: string; summary: string }[];
   inboxCount: number;
 }
@@ -48,7 +48,7 @@ export async function situationFor(store: Store, agent: AgentId, now = new Date(
       })),
     facts: facts
       .filter((f) => visible(scope, f.topics, f.text))
-      .map((f) => ({ id: f.id, kind: f.kind, text: f.text, from: name(f.source_agent), provenance: AUTHOR_LABEL[f.author] })),
+      .map((f) => ({ id: f.id, kind: f.kind, text: f.text, from: name(f.source_agent), provenance: AUTHOR_LABEL[f.author], savedAt: new Date(f.created_at).toISOString() })),
     recentActivity: events
       .filter((e) => e.agent !== agent && e.summary && visible(scope, e.topics, e.summary))
       .slice(0, 25)
@@ -74,7 +74,7 @@ export function renderSituation(view: SituationView, ownerName: string, tz: stri
 
   if (view.facts.length) {
     lines.push('', 'GOALS & PREFERENCES');
-    for (const f of view.facts) lines.push(`- [${f.kind}] ${f.text}`);
+    for (const f of view.facts) lines.push(`- [${f.kind}] ${f.text} (saved ${ageOf(f.savedAt)})`);
   }
 
   lines.push('', 'RECENT ACTIVITY IN OTHER AGENTS (48h)');
@@ -93,6 +93,25 @@ export async function compactContextFor(store: Store, agent: AgentId, limit = 5)
   const scope = await store.scope(agent);
   const live = await store.liveSituation();
   return live.filter((s) => visible(scope, s.topics, s.text)).slice(0, limit).map((s) => s.text);
+}
+
+/** "3 months ago", so anyone reading can tell how far to trust something without doing date math. */
+export function ageOf(date: Date | string | null, now = new Date()): string {
+  if (!date) return 'undated';
+  const days = Math.floor((now.getTime() - new Date(date).getTime()) / 86_400_000);
+  if (days < 1) return 'today';
+  if (days < 14) return `${days} day${days === 1 ? '' : 's'} ago`;
+  if (days < 60) return `${Math.round(days / 7)} weeks ago`;
+  if (days < 365) return `${Math.round(days / 30)} months ago`;
+  const years = Math.round(days / 365);
+  return `${years} year${years === 1 ? '' : 's'} ago`;
+}
+
+/** One line on how far to trust an old chat: when it's from and whether anything newer replaced it. */
+export function statusOf(row: Pick<ArchiveRow, 'started_at' | 'freshness' | 'freshness_note'>, now = new Date()): string {
+  const date = row.started_at ? new Date(row.started_at).toISOString().slice(0, 10) : 'undated';
+  const label = row.freshness === 'outdated' ? `OUTDATED${row.freshness_note ? `: ${row.freshness_note}` : ''}` : row.freshness === 'historical' ? 'finished, a record only' : row.freshness === 'current' ? 'still current' : 'not checked yet';
+  return `${date}, ${ageOf(row.started_at, now)}, ${label}`;
 }
 
 /** Can this agent see an imported chat? Its folder topics decide, and its words are scanned too. */

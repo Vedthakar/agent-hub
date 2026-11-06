@@ -112,6 +112,16 @@ function claudeRoutines(json: string): ImportedConversation[] {
     .map((r) => ({ source: 'claude-code-cloud', externalId: r.routine_id, title: r.name?.trim() || 'Cloud routine', messages: one(r.routine_id, r.prompt!, r.created_at ?? null), kind: 'code' as const, folder: 'Projects/Cloud routines', summary: `Scheduled cloud routine: ${r.name ?? ''}` }));
 }
 
+/** A plain note dropped in Import/. One with "profile" in its name is your most trusted statement of what's true. */
+export function noteFile(name: string, text: string, modifiedAt: Date): ImportedConversation | null {
+  const body = text.trim();
+  if (!body) return null;
+  const title = /^#\s+(.+)$/m.exec(body)?.[1]?.trim() || name.replace(/\.(md|txt)$/i, '');
+  const at = modifiedAt.toISOString();
+  if (/profile/i.test(name)) return { source: 'profile', externalId: name, title, messages: [{ id: name, role: 'user', text: body, at }], kind: 'memory', folder: 'Profile', summary: `Profile as of ${at.slice(0, 10)}. Newer information than older chats.` };
+  return { source: 'note', externalId: name, title, messages: [{ id: name, role: 'user', text: body, at }] };
+}
+
 /** What each part of a split export means. Account data like login history is deliberately left out. */
 export function parseExportFiles(files: { name: string; text: string }[]): { conversations: ImportedConversation[]; understood: boolean } {
   const conversations: ImportedConversation[] = [];

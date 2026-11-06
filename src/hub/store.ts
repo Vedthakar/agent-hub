@@ -748,7 +748,7 @@ export class Store {
       `INSERT INTO archive (source, external_id, title, messages, hash, started_at, updated_at, kind, folder, summary, read_version, organized_at, sorted_at, sort_attempts)
        VALUES ($1, $2, $3, $4::text::jsonb, $5, $6, $7, $8, $9, $10, $11, $12, $12, $13)
        ON CONFLICT (source, external_id) DO UPDATE
-         SET title = EXCLUDED.title, messages = EXCLUDED.messages, hash = EXCLUDED.hash, updated_at = EXCLUDED.updated_at, needs_write = true,
+         SET title = EXCLUDED.title, messages = EXCLUDED.messages, hash = EXCLUDED.hash, updated_at = EXCLUDED.updated_at, needs_write = true, checked_at = NULL,
              read_version = CASE $14
                WHEN 'keep' THEN archive.read_version
                WHEN 'defer' THEN 99
@@ -832,7 +832,7 @@ export class Store {
   }
 
   async markArchiveOrganized(id: number, folder: string | null, topics: string[], rewrite: boolean): Promise<void> {
-    await this.db.query('UPDATE archive SET folder = $2, topics = $3, organized_at = now(), sorted_at = COALESCE(sorted_at, now()), needs_write = $4 OR needs_write, sort_attempts = 0 WHERE id = $1', [id, folder, topics, rewrite]);
+    await this.db.query('UPDATE archive SET folder = $2, topics = $3, organized_at = now(), sorted_at = COALESCE(sorted_at, now()), needs_write = $4 OR needs_write, sort_attempts = 0, checked_at = NULL WHERE id = $1', [id, folder, topics, rewrite]);
   }
 
   /** "Organize again": forgets the folder tree so the next pass builds a new one. Memory files stay where they are. */
@@ -841,8 +841,8 @@ export class Store {
   }
 
   /** Just what index notes need, so they don't load every message. */
-  archiveIndex(): Promise<Pick<ArchiveRow, 'id' | 'title' | 'folder' | 'summary' | 'vault_path' | 'topics'>[]> {
-    return this.db.query('SELECT id, title, folder, summary, vault_path, topics FROM archive ORDER BY started_at DESC NULLS LAST, id DESC');
+  archiveIndex(): Promise<Pick<ArchiveRow, 'id' | 'title' | 'folder' | 'summary' | 'vault_path' | 'topics' | 'started_at' | 'freshness' | 'freshness_note'>[]> {
+    return this.db.query('SELECT id, title, folder, summary, vault_path, topics, started_at, freshness, freshness_note FROM archive ORDER BY started_at DESC NULLS LAST, id DESC');
   }
 
   async bumpArchiveAttempts(ids: number[]): Promise<void> {
@@ -852,6 +852,34 @@ export class Store {
   async archiveFolders(limit = 80): Promise<string[]> {
     const rows = await this.db.query<{ folder: string }>('SELECT folder FROM archive WHERE folder IS NOT NULL GROUP BY folder ORDER BY count(*) DESC LIMIT $1', [limit]);
     return rows.map((r) => r.folder);
+  }
+
+  /** The next folder with anything new to judge. Waits until sorting has finished, so it sees final folders. */
+  async folderToCheck(): Promise<string | null> {
+    const rows = await this.db.query<{ folder: string }>(
+      `SELECT folder FROM archive
+       WHERE folder IS NOT NULL AND source <> 'profile' AND checked_at IS NULL AND organized_at IS NOT NULL
+       GROUP BY folder ORDER BY count(*) DESC, folder LIMIT 1`,
+    );
+    return rows[0]?.folder ?? null;
+  }
+
+  archiveInFolder(folder: string, limit: number): Promise<ArchiveRow[]> {
+    return this.db.query('SELECT * FROM archive WHERE folder = $1 ORDER BY started_at DESC NULLS LAST, id DESC LIMIT $2', [folder, limit]);
+  }
+
+  async markFolderChecked(folder: string): Promise<void> {
+    await this.db.query('UPDATE archive SET checked_at = now() WHERE folder = $1', [folder]);
+  }
+
+  async markArchiveFreshness(id: number, freshness: string, note: string | null): Promise<void> {
+    await this.db.query('UPDATE archive SET freshness = $2, freshness_note = $3, needs_write = true WHERE id = $1', [id, freshness, note]);
+  }
+
+  /** Your newest profile, the most trusted statement of what's true. */
+  async latestProfile(): Promise<ArchiveRow | undefined> {
+    const rows = await this.db.query<ArchiveRow>("SELECT * FROM archive WHERE source = 'profile' ORDER BY started_at DESC NULLS LAST, id DESC LIMIT 1");
+    return rows[0];
   }
 
   archiveCounts(): Promise<{ source: string; total: number; sorted: number }[]> {
@@ -969,6 +997,10 @@ export interface ArchiveRow {
   needs_write: boolean;
   sorted_at: Date | null;
   sort_attempts: number;
+  /** Whether this still holds, as judged against newer chats: current, outdated or historical. */
+  freshness: 'current' | 'outdated' | 'historical' | null;
+  freshness_note: string | null;
+  checked_at: Date | null;
   kind: string;
   read_version: number;
   organized_at: Date | null;

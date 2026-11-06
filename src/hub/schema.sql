@@ -276,6 +276,9 @@ CREATE INDEX IF NOT EXISTS archive_unsorted ON archive (id) WHERE sorted_at IS N
 ALTER TABLE archive ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'chat';
 ALTER TABLE archive ADD COLUMN IF NOT EXISTS read_version INT NOT NULL DEFAULT 0;
 ALTER TABLE archive ADD COLUMN IF NOT EXISTS organized_at TIMESTAMPTZ;
+ALTER TABLE archive ADD COLUMN IF NOT EXISTS freshness TEXT;
+ALTER TABLE archive ADD COLUMN IF NOT EXISTS freshness_note TEXT;
+ALTER TABLE archive ADD COLUMN IF NOT EXISTS checked_at TIMESTAMPTZ;
 
 -- ---------- Row-level security ----------
 -- The hub connects as the table owner and bypasses RLS. Supabase exposes the public schema to the

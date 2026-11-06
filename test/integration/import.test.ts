@@ -499,3 +499,76 @@ describe('iMessage history', () => {
     expect(again.id).toBe(job.id);
   });
 });
+
+describe('what’s old and what’s not', () => {
+  async function folderOfChats() {
+    const ctx = await setup();
+    drop(ctx.cfg.vaultPath, 'a.json', JSON.stringify([claude('k1', 'Google final round prep', 'Prep me for Google'), claude('k2', 'Google rejection next steps', 'They rejected me')]));
+    await file(ctx.hub);
+    const ids = Object.fromEntries((await ctx.store.searchArchive('google')).map((r) => [r.external_id, r.id]));
+    ctx.worker.next.push(() => ({ items: Object.values(ids).map((id) => ({ id, area: 'Job Search', summary: `summary ${id}` })) }));
+    await ctx.hub.importer.sortStep(soon(2));
+    ctx.worker.next.push(() => ({ folders: [{ path: 'Job Search/Google', ids: Object.values(ids) }] }));
+    await ctx.hub.importer.sortStep(soon(4));
+    return { ...ctx, ids };
+  }
+
+  it('marks replaced chats outdated, puts them last, and says what replaced them everywhere', async () => {
+    const ctx = await folderOfChats();
+    const { hub, store, worker, ids, cfg, url } = ctx;
+    drop(cfg.vaultPath, 'Profile from Instinct.md', '# Profile from Instinct\n\nGoogle: rejected after the final round.');
+    await file(hub);
+    worker.next.push(() => ({ state: 'Rejected after the final round. Newest information is from today.', items: [{ id: ids.k1, status: 'outdated', note: 'Rejected after the final round' }, { id: ids.k2, status: 'current' }, { id: 99999, status: 'outdated' }] }));
+    await hub.importer.sortStep(soon(6));
+    expect(worker.calls.at(-1)!.user).toContain('rejected after the final round');
+    expect(worker.calls.at(-1)!.system).toContain('Newer information beats older');
+    expect((await store.archiveById(ids.k1))!.freshness).toBe('outdated');
+    expect(await store.folderToCheck()).toBeNull();
+    const note = notes(path.join(cfg.vaultPath, 'Library')).find((n) => n.includes('final round prep'))!;
+    const body = readFileSync(path.join(cfg.vaultPath, 'Library', note), 'utf8');
+    expect(body).toContain('status: outdated');
+    expect(body).toContain('Outdated: Rejected after the final round');
+    const index = readFileSync(path.join(cfg.vaultPath, 'Library', 'Job Search', 'Google', 'Google.md'), 'utf8');
+    expect(index).toContain('Where this stands');
+    expect(index).toContain('**(outdated)**');
+    const c = new Client({ name: 'test', version: '1' });
+    await c.connect(new StreamableHTTPClientTransport(new URL(`${url}/mcp`), { requestInit: { headers: { authorization: 'Bearer claude-token' } } }));
+    cleanups.push(() => c.close());
+    const call = async (name: string, args: Record<string, unknown> = {}) => ((await c.callTool({ name, arguments: args })) as { content: { text: string }[] }).content[0].text;
+    const found = await call('search_history', { query: 'google' });
+    expect(found.indexOf('rejection next steps')).toBeLessThan(found.indexOf('final round prep'));
+    expect(found).toContain('OUTDATED: Rejected after the final round');
+    expect(await call('read_old_chat', { id: ids.k1 })).toContain('OUTDATED');
+    expect(await call('get_situation')).toContain('latest profile is old chat');
+  });
+
+  it('a new chat in a folder means it gets checked again, and a bad reply doesn’t block the rest', async () => {
+    const { hub, store, worker, ids } = await folderOfChats();
+    worker.complete = async () => 'no json';
+    await hub.importer.sortStep(soon(6));
+    expect(await store.folderToCheck()).toBeNull();
+    const row = (await store.archiveById(ids.k1))!;
+    await store.upsertArchive({ source: 'claude', externalId: 'k1', title: row.title, messages: [...row.messages, { id: 'n', role: 'user', text: 'update', at: null }], hash: 'changed', startedAt: null, updatedAt: null }, 'keep');
+    expect(await store.folderToCheck()).toBe('Job Search/Google');
+  });
+
+  it('keeps a limit pause from marking a folder as checked', async () => {
+    const { hub, store, worker } = await folderOfChats();
+    worker.complete = async () => {
+      throw new WorkerUnavailable('limit', 'limit', 3600_000);
+    };
+    await hub.importer.sortStep(soon(6));
+    expect(await store.folderToCheck()).toBe('Job Search/Google');
+  });
+
+  it('files plain notes, and a profile needs no tokens', async () => {
+    const { hub, store, cfg, worker } = await setup();
+    drop(cfg.vaultPath, 'Profile.md', '# Me\n\nFacts about me.');
+    drop(cfg.vaultPath, 'idea.txt', 'A startup idea about robots');
+    await file(hub);
+    expect((await store.latestProfile())!.title).toBe('Me');
+    expect((await store.searchArchive('robots'))[0].title).toBe('idea');
+    expect(readdirSync(path.join(cfg.vaultPath, 'Import', 'Done')).sort()).toEqual(['Profile.md', 'idea.txt']);
+    expect(worker.calls).toEqual([]);
+  });
+});
