@@ -71,6 +71,7 @@ export async function agentCards(hub: Hub): Promise<AgentCard[]> {
       if (!mac.paired && !mac.lastSeenAt) missing.push('Connect your Mac');
       else if (mac.fullDiskAccess === false) missing.push('Turn on Full Disk Access');
       if (!handle) missing.push(`Pick ${name}'s Messages thread`);
+      else if (agent === 'instinct' && (handle === cfg.instinctEmail || /@mail\.instinct\.com$/i.test(handle))) missing.push("That's Instinct's mailbox, not your iMessage thread. Pick the thread");
       if (agent === 'instinct') {
         if (!cfg.instinctEmail) missing.push("Add Instinct's forwarding email");
         if (!emailReady) missing.push('Set up email sending');
@@ -88,6 +89,11 @@ export async function agentCards(hub: Hub): Promise<AgentCard[]> {
     let state: ConnState = missing.length ? 'setup' : 'connected';
     let detail = missing.length ? missing[0] + (missing.length > 1 ? ` (+${missing.length - 1} more)` : '') : how;
     const imessage = kind === 'imessage';
+    // Set up isn't the same as working: say so when nothing has ever come through this thread.
+    if (state === 'connected' && imessage && !lastEvents.get(agent) && !hl?.lastReadAt) {
+      state = 'setup';
+      detail = 'No messages seen from this thread yet. Check it’s the right one';
+    }
     if (state === 'connected' && imessage && mac.lastSeenAt && !mac.online) {
       state = 'error';
       detail = 'Your Mac is offline';

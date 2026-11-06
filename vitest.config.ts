@@ -14,7 +14,7 @@ export default defineConfig({
     projects: [
       // Offline: pure logic, plus in-process PGlite where a real SQL engine is needed.
       { test: { ...shared, name: 'unit', include: ['test/unit/**/*.test.ts'] } },
-      // Router golden tests: recorded LLM replies, fixed clock, fresh PGlite per case.
+      // Router golden tests: recorded worker replies, fixed clock, fresh PGlite per case.
       { test: { ...shared, name: 'golden', include: ['test/golden/**/*.test.ts'] } },
       // Integration, end-to-end and RLS tests on local Supabase (`supabase start`).
       {

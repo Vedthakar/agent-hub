@@ -165,7 +165,9 @@ describe('onboarding wizard', () => {
     expect((await b.get('/onboarding')).headers.get('location')).toBe('/onboarding/welcome');
     expect(await b.html('/onboarding/welcome')).toMatch(/Step 1 of \d+/);
     expect((await b.submit('/onboarding/welcome', { 'owner.name': 'Ved', 'owner.timezone': 'Not/AZone' }))).toBe('/onboarding/welcome?err=invalid');
-    expect(await b.submit('/onboarding/welcome', { 'owner.name': 'Ved', 'owner.timezone': 'America/Los_Angeles' })).toBe('/onboarding/mac');
+    expect(await b.submit('/onboarding/welcome', { 'owner.name': 'Ved', 'owner.timezone': 'America/Los_Angeles' })).toBe('/onboarding/agents');
+    // Which agents comes first: picking one that lives in iMessage is what adds the Mac steps.
+    expect(await b.submit('/onboarding/agents', { agent: ['claude', 'instinct', 'grok'] })).toBe('/onboarding/mac');
     expect([h.cfg.ownerName, h.cfg.timezone]).toEqual(['Ved', 'America/Los_Angeles']);
 
     // Step 2: connect the Mac and grant Full Disk Access.
@@ -208,15 +210,13 @@ describe('onboarding wizard', () => {
     expect((await b.api<{ status: string }>('GET', `/outbox/${test.body.outboxId}`)).body.status).toBe('sent');
     expect(await b.submit('/onboarding/phone', { 'approval.handle': HANDLES.approval })).toBe('/onboarding/brain');
 
-    // Step 5: the router's AI key goes to the encrypted store, never the settings table.
-    expect(await b.submit('/onboarding/brain', { 'router.provider': 'anthropic', 'router.key': 'sk-ant-test-wizard-key' })).toBe('/onboarding/agents');
-    expect(h.cfg.router.apiKey).toBe('sk-ant-test-wizard-key');
-    const dump = JSON.stringify(await h.store.db.query('SELECT * FROM settings')) + JSON.stringify(await h.store.db.query('SELECT * FROM secrets'));
-    expect(dump).not.toContain('sk-ant-test-wizard-key');
-    expect(dump).toContain('cfg.router.key');
+    // Step 5: the background worker is opt-in, and turning it on stores no key anywhere.
+    expect(h.cfg.worker.enabled).toBe(false);
+    expect(await b.submit('/onboarding/brain', { enabled: '1' })).toBe('/onboarding/agent-claude');
+    expect(h.cfg.worker.enabled).toBe(true);
 
     // Step 6: pick agents. Picked ones are switched on, the rest off, and each gets its own step.
-    expect(await b.submit('/onboarding/agents', { agent: ['claude', 'instinct', 'grok'] })).toBe('/onboarding/agent-claude');
+    expect(await b.get('/onboarding/agents').then((r) => r.status)).toBe(200); // still there to go back to
     const scopes = await h.store.scopes();
     expect(['claude', 'instinct', 'grok', 'stanley', 'boardy', 'chatgpt', 'gemini'].map((a) => scopes.get(a as never)?.enabled)).toEqual([true, true, true, false, false, false, false]);
 
@@ -280,18 +280,72 @@ describe('onboarding wizard', () => {
     await b.login();
     expect(await b.html('/')).toContain('Finish setting up');
     await b.submit('/onboarding/welcome', { 'owner.name': 'Ved', 'owner.timezone': 'America/New_York' });
-    expect((await b.get('/onboarding')).headers.get('location')).toBe('/onboarding/mac');
+    expect((await b.get('/onboarding')).headers.get('location')).toBe('/onboarding/agents');
     expect(await b.submit('/onboarding/skip-all')).toBe('/');
     expect(await b.html('/')).not.toContain('Finish setting up');
     // Unknown steps bounce back to the wizard instead of erroring.
     expect((await b.get('/onboarding/agent-nobody')).headers.get('location')).toBe('/onboarding');
   });
 
-  it('skips the AI key step when the key comes from the environment', async () => {
-    const h = await hubFor({ ANTHROPIC_API_KEY: 'sk-ant-env' });
+  it('adds, picks and removes a worker account; removing the active one falls back to the default', async () => {
+    const h = await hubFor({});
     const b = browser(h.url);
     await b.login();
-    expect(await b.submit('/onboarding/phone', { 'approval.handle': HANDLES.approval })).toBe('/onboarding/agents');
+    expect(await b.submit('/settings/worker/account', { label: 'Work account' })).toBe('/settings?ok=saved');
+    expect(h.cfg.worker.accounts.map((a) => a.id)).toEqual(['default', 'work-account']);
+    expect(await b.submit('/settings/worker', { account: 'work-account' })).toBe('/settings?ok=saved');
+    expect(h.cfg.worker.activeAccount).toBe('work-account');
+    expect(await b.submit('/settings/worker/account/work-account/remove', {})).toBe('/settings?ok=saved');
+    expect(h.cfg.worker.accounts.map((a) => a.id)).toEqual(['default']);
+    expect(h.cfg.worker.activeAccount).toBe('default');
+  });
+
+  it('won’t save a Gmail password that can’t work, and checks the login first', async () => {
+    const h = await hubFor({ SMTP_URL: '', EMAIL_FROM: '' });
+    const b = browser(h.url);
+    await b.login();
+    const save = (password: string) => b.submit('/connections/email/save', { provider: 'gmail', address: 'ved@gmail.com', password });
+    expect(await save('MyNormalPw1!')).toBe('/connections?err=appPassword');
+    h.hub.checkEmailLogin = async () => 'rejected';
+    expect(await save('abcd efgh ijkl mnop')).toBe('/connections?err=emailLogin');
+    expect(h.hub.connections.isSet('email.smtp')).toBe(false);
+    h.hub.checkEmailLogin = async () => 'unknown';
+    expect(await save('abcd efgh ijkl mnop')).toBe('/connections?ok=saved');
+    expect(h.cfg.email.smtpUrl).toContain(':abcdefghijklmnop@');
+  });
+
+  it('someone without iMessage agents never sees Mac setup', async () => {
+    const h = await hubFor({});
+    const b = browser(h.url);
+    await b.login();
+    await b.submit('/onboarding/welcome', { 'owner.name': 'Sam', 'owner.timezone': 'America/New_York' });
+    expect(await b.submit('/onboarding/agents', { agent: ['claude', 'chatgpt'] })).toBe('/onboarding/brain');
+    expect((await b.get('/onboarding/mac')).status).not.toBe(200);
+  });
+
+  it('makes a connection password once, lets you choose one, and rejects a weak one or your own', async () => {
+    const h = await hubFor({});
+    const b = browser(h.url);
+    await b.login();
+    const made = await b.form('/connections/claude/password', { password: '' });
+    const page = await made.text();
+    expect(page).toContain('Copy this now');
+    expect(page).toMatch(/id="pw-claude" readonly value="[\w-]{20,}"/);
+    expect(await b.html('/connections/claude')).not.toContain('id="pw-claude"');
+    expect(h.hub.connections.hasAgentPassword('claude')).toBe(true);
+    expect(await b.submit('/connections/chatgpt/password', { password: 'short' })).toBe('/connections/chatgpt?err=weak');
+    expect(await b.submit('/connections/chatgpt/password', { password: 'hunter2hunter2' })).toBe('/connections/chatgpt?ok=saved');
+    expect(await h.hub.connections.verifyConnectPassword('chatgpt', 'hunter2hunter2')).toBe(true);
+    expect((await b.form('/connections/instinct/password', { password: 'x'.repeat(12) })).status).toBe(404);
+    expect(await b.submit('/connections/chatgpt/password/remove', {})).toBe('/connections/chatgpt?ok=saved');
+    expect(h.hub.connections.hasAgentPassword('chatgpt')).toBe(false);
+  });
+
+  it('skips the worker step when it is set from the environment', async () => {
+    const h = await hubFor({ WORKER_ENABLED: '1' });
+    const b = browser(h.url);
+    await b.login();
+    expect(await b.submit('/onboarding/agents', { agent: ['claude'] })).toBe('/onboarding/agent-claude');
   });
 });
 

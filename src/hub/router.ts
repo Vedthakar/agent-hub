@@ -3,10 +3,11 @@ import { z } from 'zod';
 import { agentIds, TOPICS, isAgentId, type AgentId, type Author } from '../shared/types.js';
 import { ADAPTERS } from './adapters/index.js';
 import type { HubConfig } from './config.js';
-import { LlmError, extractJson, type Llm } from './llm.js';
+import { cleanTopics } from './scopes.js';
 import type { EventRow, Store } from './store.js';
 import { proposeTask, type ProposeOutcome } from './tasks.js';
 import { localIso } from './tz.js';
+import { WorkerError, extractJson, type Worker } from './worker.js';
 
 const TOPIC_GUIDE: Record<(typeof TOPICS)[number], string> = {
   plan: "plans / priorities for today or tomorrow (e.g. the nightly debrief's plan)",
@@ -68,11 +69,7 @@ const RouterOutput = z.object({
 });
 export type RouterOutput = z.infer<typeof RouterOutput>;
 
-export function cleanTopics(topics: string[]): string[] {
-  const valid = new Set<string>(TOPICS);
-  const out = [...new Set(topics.map((t) => t.toLowerCase().trim()).filter((t) => valid.has(t)))];
-  return out.length ? out : ['general'];
-}
+export { cleanTopics };
 
 function systemPrompt(ownerName: string, tag: string): string {
   return `You are the router inside ${ownerName}'s "agent hub". The hub keeps all of ${ownerName}'s AI agents in sync.
@@ -135,7 +132,7 @@ const oneLine = (s: string) => s.replace(/[\r\n\u2028\u2029]+/g, ' ⏎ ');
 function renderLines(lines: TranscriptLine[], ownerName: string, agentName: string, maxChars = 12_000): string {
   const rendered = lines.map((l) => {
     const [first, ...rest] = l.text.split(/\r?\n|\u2028|\u2029/);
-    // Continuation lines are indented, so text can't fake a new "[m9 …] Ved:" header.
+    // Continuation lines are indented, so text can't fake a new "[m9 …] Name:" header.
     return [`[${l.id} ${l.at.toISOString()}] ${l.author === 'user' ? ownerName : agentName}: ${first}`, ...rest.map((r) => `    | ${r}`)].join('\n');
   });
   let out = rendered.join('\n');
@@ -220,16 +217,18 @@ export interface RouteResult {
 /** Per-call delimiter tag; tests inject a fixed one so recorded prompts stay byte-identical. */
 export const randomTag = () => `untrusted-${randomBytes(8).toString('hex')}`;
 
-/** One LLM pass over an event: summary → situation → facts → tasks. */
+/** One worker pass over an event: summary → situation → facts → tasks. */
 export async function routeEvent(
-  deps: { store: Store; cfg: HubConfig; llm: Llm | null; tag?: () => string },
+  deps: { store: Store; cfg: HubConfig; worker: Worker | null; tag?: () => string },
   event: EventRow,
   opts: { debrief?: boolean } = {},
 ): Promise<RouteResult> {
-  const { store, cfg, llm } = deps;
-  if (!llm) {
-    const summary = event.summary || event.raw_excerpt.slice(0, 280);
-    await store.updateEventAnalysis(event.id, summary, event.topics.length ? event.topics : ['general']);
+  const { store, cfg, worker } = deps;
+  if (!worker) {
+    // A chat nobody may read yet is recorded as having happened. Its words stay out of what other agents see.
+    const said = event.kind === 'chat' ? (await store.eventLines(event.id)).length : 0;
+    const summary = event.summary || (event.kind === 'chat' ? `${cfg.ownerName} talked with ${ADAPTERS[event.agent]?.name ?? event.agent} (${said} message${said === 1 ? '' : 's'}).` : event.raw_excerpt.slice(0, 280));
+    await store.updateEventAnalysis(event.id, summary, event.topics.length ? event.topics : ['general'], 'log');
     return { output: RouterOutput.parse({ summary }), outcomes: [] };
   }
 
@@ -240,9 +239,9 @@ export async function routeEvent(
     text: r.text,
   }));
   const tag = (deps.tag ?? randomTag)();
-  const reply = await llm.complete(systemPrompt(cfg.ownerName, tag), await userPrompt(store, cfg, event, lines, Boolean(opts.debrief), tag));
+  const reply = await worker.complete(systemPrompt(cfg.ownerName, tag), await userPrompt(store, cfg, event, lines, Boolean(opts.debrief), tag));
   const parsed = RouterOutput.safeParse(extractJson(reply));
-  if (!parsed.success) throw new LlmError(`router output failed schema: ${parsed.error.issues[0]?.message ?? 'invalid'}`, true);
+  if (!parsed.success) throw new WorkerError(`router output failed schema: ${parsed.error.issues[0]?.message ?? 'invalid'}`, true);
   const output = parsed.data;
   // All writes for one event commit together, so a failure halfway can be retried without duplicates.
   return store.tx((tx) => applyRouterOutput(tx, cfg, event, output, { ...opts, lines }));
@@ -271,7 +270,9 @@ export async function applyRouterOutput(
   const now = new Date();
   const author = (evidence: string[]) => authorFor(event, opts.lines ?? [], evidence);
   const eventTopics = cleanTopics(output.topics);
-  await store.updateEventAnalysis(event.id, output.summary || event.summary, eventTopics);
+  const hasMemory = output.situation.some((x) => x.text.trim()) || output.facts.some((x) => x.text.trim());
+  const triage = hasMemory && output.tasks.length ? 'both' : output.tasks.length ? 'task' : hasMemory ? 'memory' : 'log';
+  await store.updateEventAnalysis(event.id, output.summary || event.summary, eventTopics, triage);
 
   const liveIds = new Set((await store.liveSituation(now)).map((s) => s.id));
   const created: number[] = [];

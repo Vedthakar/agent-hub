@@ -4,7 +4,7 @@ import { log } from '../shared/log.js';
 import { CUSTOM_AGENT_ID, isAgentId, type AgentId, type CustomAgentId } from '../shared/types.js';
 import { registerCustomAgents } from './adapters/index.js';
 import type { CustomAgentDef } from './adapters/custom.js';
-import type { HubConfig } from './config.js';
+import { DEFAULT_WORKER_ACCOUNT, type HubConfig, type WorkerAccount } from './config.js';
 import { safeEqual } from './crypto.js';
 import { customDefaultScope } from './scopes.js';
 import type { SecretStore } from './secrets.js';
@@ -43,26 +43,22 @@ const FIELDS: Record<string, Field> = {
       if (c.approval.channel === 'none') c.approval.channel = 'imessage';
     }),
   },
-  'router.provider': field('ROUTER_PROVIDER', (c, v) => {
-    if (v !== 'anthropic' && v !== 'openai') return;
-    if (c.router.provider !== v) c.router.model = v === 'openai' ? 'gpt-4.1' : 'claude-sonnet-4-5';
-    c.router.provider = v;
+  'worker.enabled': field('WORKER_ENABLED', (c, v) => (c.worker.enabled = v === '1')),
+  'worker.accounts': field(null, (c, v) => {
+    const extra = JSON.parse(v) as WorkerAccount[];
+    c.worker.accounts = [DEFAULT_WORKER_ACCOUNT, ...extra.filter((a) => a.id !== DEFAULT_WORKER_ACCOUNT.id)];
   }),
-  'router.key': {
-    secret: true,
-    env: 'ANTHROPIC_API_KEY',
-    envSet: (e) => has(e, 'ANTHROPIC_API_KEY') || has(e, 'OPENAI_API_KEY'),
-    write: (c, v) => {
-      c.router.apiKey = v;
-      if (c.router.provider === 'none') c.router.provider = v.startsWith('sk-ant-') ? 'anthropic' : 'openai';
-      if (!c.router.model) c.router.model = c.router.provider === 'openai' ? 'gpt-4.1' : 'claude-sonnet-4-5';
-    },
-  },
+  'worker.account': field(null, (c, v) => (c.worker.activeAccount = v)),
+  'worker.sources': field('WORKER_SOURCES', (c, v) => (c.worker.sources = v.split(',').filter(Boolean))),
+  'worker.model': field('WORKER_MODEL', (c, v) => (c.worker.model = v)),
+  'vault.path': field('VAULT_PATH', (c, v) => (c.vaultPath = v)),
   'email.provider': field(null, () => undefined),
   'email.from': field('EMAIL_FROM', (c, v) => (c.email.from = v)),
   'email.smtp': field('SMTP_URL', (c, v) => (c.email.smtpUrl = v), true),
   'email.imap': field('IMAP_URL', (c, v) => (c.imap.url = v), true),
   'instinct.email': field('INSTINCT_EMAIL', (c, v) => (c.instinctEmail = v)),
+  'instinct.brainToken': field(null, () => undefined, true),
+  'instinct.digestTimes': field('INSTINCT_DIGEST_TIMES', (c, v) => (c.instinctDigestTimes = v.split(',').map((t) => t.trim()).filter((t) => /^([01]\d|2[0-3]):[0-5]\d$/.test(t)))),
   'boardy.email': field('BOARDY_EMAIL', (c, v) => (c.boardyEmail = v)),
   'profile.fullName': field('OWNER_FULL_NAME', (c, v) => (c.owner.fullName = v)),
   'profile.bio': field('OWNER_BIO', (c, v) => (c.owner.bio = v)),
@@ -154,10 +150,11 @@ export class Connections {
   private base: HubConfig;
   private daemonTokenHashes: string[] = [];
   private ownerHash: PasswordHash | null = null;
+  private agentPasswords: Partial<Record<AgentId, PasswordHash>> = {};
   custom: CustomAgentDef[] = [];
   onboarding: OnboardingState = { completed: false, agents: [] };
-  /** Unlocks first-run password creation. Printed to the server log; never stored. */
-  readonly setupToken = randomBytes(18).toString('base64url');
+  /** Unlocks first-run password creation. Kept until a password exists so a restart doesn't kill the setup link. */
+  setupToken = randomBytes(18).toString('base64url');
   /** Set when the secret store couldn't be read (e.g. a locked Keychain). */
   secretError: string | null = null;
   onChange: (() => void | Promise<void>) | null = null;
@@ -177,7 +174,15 @@ export class Connections {
     this.custom = (await s.getSetting<CustomAgentDef[]>('agents.custom', [])).filter((d) => CUSTOM_AGENT_ID.test(d.id));
     this.onboarding = { completed: false, agents: [], ...(await s.getSetting<Partial<OnboardingState>>('onboarding', {})) };
     this.ownerHash = await s.getSetting<PasswordHash | null>('owner.password', null);
+    this.agentPasswords = await s.getSetting<Partial<Record<AgentId, PasswordHash>>>('agent.passwords', {});
     this.daemonTokenHashes = await s.getSetting<string[]>('daemon.tokens', []);
+    if (!this.hasOwnerPassword()) {
+      const stored = await s.getSetting<string | null>('owner.setupToken', null);
+      if (stored) this.setupToken = stored;
+      else await s.setSetting('owner.setupToken', this.setupToken);
+    } else {
+      await s.setSetting('owner.setupToken', null);
+    }
     this.secretValues = {};
     if (this.secrets) {
       try {
@@ -219,14 +224,14 @@ export class Connections {
       stanley: b.stanley,
     });
     Object.assign(c.approval, { channel: b.approval.channel, imessageHandle: b.approval.imessageHandle });
-    Object.assign(c.router, { provider: b.router.provider, apiKey: b.router.apiKey, model: b.router.model });
+    Object.assign(c.worker, b.worker);
+    c.vaultPath = b.vaultPath;
+    c.instinctDigestTimes = b.instinctDigestTimes;
     Object.assign(c.email, b.email);
     Object.assign(c.imap, b.imap);
 
     const all = { ...this.values, ...this.secretValues };
-    // Provider before key, so the key's default provider only kicks in when none was chosen.
-    const order = Object.keys(all).sort((a, b) => (a === 'router.provider' ? -1 : b === 'router.provider' ? 1 : 0));
-    for (const key of order) {
+    for (const key of Object.keys(all)) {
       const f = fieldFor(key);
       if (!f || f.envSet(this.env)) continue;
       f.write(c, all[key]);
@@ -328,6 +333,7 @@ export class Connections {
     if (!safeEqual(setupToken, this.setupToken)) return 'bad-token';
     if (password.length < 10) return 'weak';
     await this.storePassword(password);
+    await this.store.setSetting('owner.setupToken', null);
     await this.store.audit('owner', 'owner.password_created', {});
     return 'ok';
   }
@@ -344,11 +350,42 @@ export class Connections {
     return 'ok';
   }
 
-  private async storePassword(password: string) {
+  private async hashPassword(password: string): Promise<PasswordHash> {
     const salt = randomBytes(16);
     const hash = await scrypt(password, salt, 32, SCRYPT);
-    this.ownerHash = { alg: 'scrypt', N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p, salt: salt.toString('base64'), hash: hash.toString('base64') };
+    return { alg: 'scrypt', N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p, salt: salt.toString('base64'), hash: hash.toString('base64') };
+  }
+
+  private async storePassword(password: string) {
+    this.ownerHash = await this.hashPassword(password);
     await this.store.setSetting('owner.password', this.ownerHash);
+  }
+
+  // ---------- per-agent connection passwords ----------
+
+  hasAgentPassword(agent: AgentId): boolean {
+    return Boolean(this.agentPasswords[agent]);
+  }
+
+  /** Only ever stored hashed. It can connect this one agent, and nothing else: not another agent, not the dashboard. */
+  async setAgentPassword(agent: AgentId, password: string): Promise<void> {
+    this.agentPasswords[agent] = await this.hashPassword(password);
+    await this.store.setSetting('agent.passwords', this.agentPasswords);
+  }
+
+  async removeAgentPassword(agent: AgentId): Promise<void> {
+    delete this.agentPasswords[agent];
+    await this.store.setSetting('agent.passwords', this.agentPasswords);
+  }
+
+  /** An agent with its own password connects only with that. One without any still uses the owner's. */
+  async verifyConnectPassword(agent: AgentId, password: string): Promise<boolean> {
+    const h = this.agentPasswords[agent];
+    if (!h) return this.verifyOwnerPassword(password);
+    if (!password) return false;
+    const got = await scrypt(password, Buffer.from(h.salt, 'base64'), 32, { N: h.N, r: h.r, p: h.p, maxmem: SCRYPT.maxmem });
+    const want = Buffer.from(h.hash, 'base64');
+    return got.length === want.length && timingSafeEqual(got, want);
   }
 
   // ---------- Mac daemon pairing ----------

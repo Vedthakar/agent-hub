@@ -1,14 +1,16 @@
 import { ADAPTERS } from './adapters/index.js';
 import type { AdapterContext } from './adapters/types.js';
 import { buildDebriefDigest } from './context.js';
-import { backoffMs } from './llm.js';
+import { backoffMs } from './backoff.js';
 import type { RawMessageRow } from './store.js';
-import { localDateKey } from './tz.js';
+import { localDateKey, startOfLocalDay } from './tz.js';
 
 export const DEBRIEF_WINDOW_MS = 3 * 3600_000;
 const MAX_DIGEST_ATTEMPTS = 5;
 
 interface Pending {
+  /** Set on a regular update, which doesn't count as the day's debrief. */
+  scheduled?: boolean;
   date: string;
   startedAt: string;
   attempts: number;
@@ -29,6 +31,29 @@ export async function noteDebriefStart(ctx: AdapterContext, msg: RawMessageRow):
   return true;
 }
 
+/**
+ * Regular updates, so Instinct stays current even when it never hears the word "debrief". A time missed by more
+ * than two hours (the Mac was asleep) is skipped instead of sent late.
+ */
+export async function scheduleDigest(ctx: AdapterContext, now = new Date()): Promise<boolean> {
+  const { store, cfg, transports } = ctx;
+  if (!cfg.instinctDigestTimes.length || !cfg.instinctEmail || !transports.email) return false;
+  if ((await store.scope('instinct'))?.enabled === false || (await store.getSetting<Pending | null>('debrief.pending', null))) return false;
+  const midnight = startOfLocalDay(now, cfg.timezone).getTime();
+  const date = localDateKey(now, cfg.timezone);
+  for (const time of cfg.instinctDigestTimes) {
+    const [hour, minute] = time.split(':').map(Number);
+    const at = midnight + (hour * 60 + minute) * 60_000;
+    if (now.getTime() < at || now.getTime() - at > 2 * 3600_000) continue;
+    const key = `${date}#${time}`;
+    if ((await store.getSetting<string | null>('digest.lastSlot', null)) === key) continue;
+    await store.setSetting('digest.lastSlot', key);
+    await store.setSetting('debrief.pending', { date, startedAt: now.toISOString(), attempts: 0, nextAt: 0, scheduled: true } satisfies Pending);
+    return true;
+  }
+  return false;
+}
+
 export async function debriefActive(ctx: AdapterContext, at: Date): Promise<boolean> {
   const started = await ctx.store.getSetting<string | null>('debrief.startedAt', null);
   if (!started) return false;
@@ -37,7 +62,7 @@ export async function debriefActive(ctx: AdapterContext, at: Date): Promise<bool
 }
 
 /** Sends a pending digest; retried with backoff, then dead-lettered. */
-export async function processPendingDebrief(ctx: AdapterContext, routeFirst: () => Promise<unknown>): Promise<'sent' | 'none' | 'waiting' | 'failed' | 'paused'> {
+export async function processPendingDebrief(ctx: AdapterContext, routeFirst: () => Promise<unknown>, brainUrl: string | null = null): Promise<'sent' | 'none' | 'waiting' | 'failed' | 'paused'> {
   const { store, cfg } = ctx;
   const pending = await store.getSetting<Pending | null>('debrief.pending', null);
   if (!pending) return 'none';
@@ -45,7 +70,7 @@ export async function processPendingDebrief(ctx: AdapterContext, routeFirst: () 
   if (await store.isPaused()) return 'paused';
   // Route anything still pending first so the digest includes the latest sessions.
   await routeFirst();
-  const digest = await buildDebriefDigest(store, { ownerName: cfg.ownerName, tz: cfg.timezone });
+  const digest = await buildDebriefDigest(store, { ownerName: cfg.ownerName, tz: cfg.timezone, scheduled: pending.scheduled, brainUrl, replyTo: ctx.transports.imap ? cfg.email.from : null });
   let ok = false;
   let detail: string;
   try {
@@ -57,7 +82,7 @@ export async function processPendingDebrief(ctx: AdapterContext, routeFirst: () 
   }
   await store.touchDelivery('instinct', ok ? undefined : detail);
   if (ok) {
-    await store.setSetting('debrief.lastDate', pending.date);
+    if (!pending.scheduled) await store.setSetting('debrief.lastDate', pending.date);
     await store.setSetting('debrief.pending', null);
     await store.audit('hub', 'debrief.digest_sent', { date: pending.date, detail });
     return 'sent';

@@ -109,6 +109,49 @@ describe('chat.db reader', () => {
     reader.close();
   });
 
+  it('matches a thread by its chat identifier when that differs from the sender handle', () => {
+    const file = path.join(mkdtempSync(path.join(os.tmpdir(), 'chatdb-')), 'chat.db');
+    const db = new DatabaseSync(file);
+    db.exec(`
+      CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+      CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, style INTEGER);
+      CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, text TEXT, attributedBody BLOB, is_from_me INTEGER,
+        date INTEGER, service TEXT, handle_id INTEGER, associated_message_type INTEGER DEFAULT 0, item_type INTEGER DEFAULT 0);
+      CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+      INSERT INTO handle VALUES (1, '+15550002222');
+      INSERT INTO chat VALUES (1, 'igi@mail.instinct.com', 45);
+    `);
+    const date = BigInt(Math.floor(Date.UTC(2026, 9, 29, 22, 0) / 1000 - 978307200)) * 1_000_000_000n;
+    db.prepare('INSERT INTO message (ROWID, guid, text, is_from_me, date, service, handle_id) VALUES (?, ?, ?, ?, ?, ?, ?)').run(1, 'g1', 'from them', 0, date, 'iMessage', 1);
+    db.prepare('INSERT INTO message (ROWID, guid, text, is_from_me, date, service, handle_id) VALUES (?, ?, ?, ?, ?, ?, ?)').run(2, 'g2', 'from me', 1, date, 'iMessage', 0);
+    db.prepare('INSERT INTO chat_message_join VALUES (1, 1), (1, 2)').run();
+    db.close();
+    const reader = new ChatDb(file);
+    const { messages } = reader.readSince(0, new Set([normalizeHandle('Igi@mail.instinct.com')]));
+    expect(messages.map((m) => [m.text, m.handle, m.isFromMe])).toEqual([
+      ['from them', 'igi@mail.instinct.com', false],
+      ['from me', 'igi@mail.instinct.com', true],
+    ]);
+    reader.close();
+  });
+
+  it('stops a full page on the next row so nothing is skipped', () => {
+    const reader = new ChatDb(fixture());
+    const watch = new Set([normalizeHandle('+15550001111')]);
+    const first = reader.readSince(0, watch, 500, 1);
+    expect(first.messages.map((m) => m.rowid)).toEqual([1]);
+    const rest: number[] = [];
+    let cursor = first.scannedTo;
+    for (;;) {
+      const page = reader.readSince(cursor, watch, 500, 1);
+      rest.push(...page.messages.map((m) => m.rowid));
+      if (page.scannedTo === cursor) break;
+      cursor = page.scannedTo;
+    }
+    expect(rest).toEqual([2, 6]);
+    reader.close();
+  });
+
   it('pages through a backlog without skipping rows', () => {
     const reader = new ChatDb(fixture());
     const watch = new Set([normalizeHandle('+15550001111')]);

@@ -15,10 +15,12 @@ import { createMcpServer } from './mcp.js';
 import { HubOAuthProvider } from './oauth.js';
 import { verifyTwilio } from './transports/sms.js';
 import { signWebhook } from './adapters/grok.js';
-import { inbox, logSession, propose, updateTask } from './agentApi.js';
+import { inbox, logSession, propose, retireMemory, saveMemory, setSituation, updateTask } from './agentApi.js';
 import { renderSituation, situationFor } from './context.js';
 import type { HubConfig } from './config.js';
-import { TOPICS, type AgentId } from '../shared/types.js';
+import { TOPICS, type AgentId, type DaemonMessage } from '../shared/types.js';
+import { brainRouter } from './brain.js';
+import type { DaemonJobRow } from './store.js';
 
 export interface DaemonHeartbeat {
   at: string;
@@ -39,6 +41,54 @@ export function hookSecret(cfg: HubConfig, agent: AgentId): string | null {
   return agent === 'grok' ? cfg.grokWebhookSecret : (cfg.agentWebhooks[agent]?.secret ?? null);
 }
 
+/** History pages go straight into the archive and the next page is queued. Message text is never kept on the job. */
+const HistoryPage = z.object({ messages: z.array(z.object({ guid: z.string(), rowid: z.number(), handle: z.string(), isFromMe: z.boolean(), text: z.string().nullable(), sentAt: z.string() }).passthrough()), scannedTo: z.number(), done: z.boolean() });
+
+/** How far back a history page may also become a live conversation. Older than this stays in the library only. */
+const RECENT_CATCHUP_MS = 48 * 60 * 60 * 1000;
+
+/**
+ * The live reader can miss a thread when the sender's handle and the chat identifier differ, so those lines
+ * never became events. A history page from the last two days fills that gap. Anything older stays a note:
+ * replaying years of chat would turn it into current tasks.
+ */
+async function catchUpRecent(hub: Hub, messages: { guid: string; handle: string; isFromMe: boolean; text: string | null; sentAt: string }[]): Promise<void> {
+  const cutoff = Date.now() - RECENT_CATCHUP_MS;
+  const rows = [];
+  for (const m of messages) {
+    const text = (m.text ?? '').trim();
+    const sentAt = new Date(m.sentAt);
+    if (!text || Number.isNaN(sentAt.getTime()) || sentAt.getTime() < cutoff) continue;
+    const agent = hub.agentForHandle(m.handle);
+    if (!agent) continue;
+    rows.push({ agent, externalId: m.guid, channel: 'imessage', author: m.isFromMe ? ('user' as const) : ('agent' as const), text, sentAt });
+  }
+  if (rows.length) await hub.store.insertRawMessages(rows);
+}
+async function finishHistoryJob(hub: Hub, job: DaemonJobRow, ok: boolean, body: { result?: unknown; error?: unknown }): Promise<void> {
+  const page = ok ? HistoryPage.safeParse(body.result) : null;
+  const handles = Array.isArray(job.args.handles) ? (job.args.handles as string[]) : [];
+  if (!page?.success) {
+    await hub.store.finishJob(job.id, false, null, String(body.error ?? 'bad history page').slice(0, 500));
+    await hub.store.setSetting('import.history', { state: 'failed', error: String(body.error ?? 'bad history page').slice(0, 200), handles, afterRowId: Number(job.args.afterRowId ?? 0) });
+    return;
+  }
+  // Held out of the sorter until the last page, so a day isn't filed from its first lines.
+  await hub.importer.addHistory(page.data.messages as unknown as DaemonMessage[], (handle) => hub.agentForHandle(handle), { defer: true });
+  await catchUpRecent(hub, page.data.messages);
+  log.info('import.history_page', { messages: page.data.messages.length, scannedTo: page.data.scannedTo, done: page.data.done });
+  await hub.store.finishJob(job.id, true, null, null);
+  if (page.data.done) {
+    await hub.store.releaseDeferredArchive();
+    await hub.store.setSetting('import.history', { state: 'done' });
+    await hub.store.audit('hub', 'import.history_done', {});
+  } else {
+    await hub.store.setSetting('import.history', { state: 'reading', afterRowId: page.data.scannedTo, handles });
+    await hub.store.enqueueJob('read-history', { handles, afterRowId: page.data.scannedTo });
+  }
+  hub.kick();
+}
+
 const Topics = z.array(z.enum(TOPICS)).optional();
 const HookBody = z.discriminatedUnion('type', [
   z.object({ type: z.literal('situation') }),
@@ -51,6 +101,16 @@ const HookBody = z.discriminatedUnion('type', [
     task_code: z.string().max(16).optional(),
   }),
   z.object({ type: z.literal('inbox') }),
+  z.object({
+    type: z.literal('set_situation'),
+    text: z.string().min(1).max(500),
+    topics: z.array(z.enum(TOPICS)).min(1),
+    expires_at: z.string().max(40).optional(),
+    valid_from: z.string().max(40).optional(),
+    slot: z.string().max(80).optional(),
+  }),
+  z.object({ type: z.literal('save_memory'), text: z.string().min(1).max(500), kind: z.enum(['goal', 'preference', 'fact']), topics: z.array(z.enum(TOPICS)).min(1) }),
+  z.object({ type: z.literal('retire_memory'), id: z.number().int().positive() }),
   z.object({
     type: z.literal('propose'),
     target_agent: z.string().max(40),
@@ -265,6 +325,12 @@ export function createApp(hub: Hub): express.Express {
       return;
     }
     const ok = req.body?.ok === true;
+    const claimed = await store.job(id);
+    if (claimed?.kind === 'read-history') {
+      await finishHistoryJob(hub, claimed, ok, req.body);
+      res.json({ ok: true });
+      return;
+    }
     const row = await store.finishJob(id, ok, ok ? (req.body?.result ?? null) : null, ok ? null : String(req.body?.error ?? 'unknown').slice(0, 500));
     res.json({ ok: Boolean(row) });
   });
@@ -346,6 +412,15 @@ export function createApp(hub: Hub): express.Express {
         res.json({ tasks: tasks.map((t) => ({ code: t.code, from: t.origin_agent, payload: t.payload })) });
         return;
       }
+      case 'set_situation':
+        res.json(await setSituation(hub, agent, call));
+        return;
+      case 'save_memory':
+        res.json(await saveMemory(hub, agent, call));
+        return;
+      case 'retire_memory':
+        res.json(await retireMemory(hub, agent, call.id));
+        return;
       case 'propose':
         res.status(200).json(await propose(hub, agent, call));
         return;
@@ -354,6 +429,9 @@ export function createApp(hub: Hub): express.Express {
         return;
     }
   });
+
+  // ---------- private read-only page for agents that can browse but can't use MCP ----------
+  app.use('/brain', brainRouter(hub));
 
   // ---------- dashboard ----------
   app.use(dashboardRouter(hub));

@@ -38,7 +38,7 @@ export function mockScreen(m: Mock): string {
   const parts: string[] = [];
   parts.push(`<rect x="0.5" y="0.5" width="${W - 1}" height="${HGT - 1}" rx="12" fill="var(--surface)" stroke="var(--border)"/>`);
   parts.push(`<rect x="0.5" y="0.5" width="${W - 1}" height="28" rx="12" fill="var(--surface-2)"/><rect x="0.5" y="16" width="${W - 1}" height="13" fill="var(--surface-2)"/>`);
-  parts.push(['#ff5f57', '#febc2e', '#28c840'].map((c, i) => `<circle cx="${16 + i * 15}" cy="14.5" r="4.5" fill="${c}"/>`).join(''));
+  parts.push(['#c9beae', '#c9beae', '#c9beae'].map((c, i) => `<circle cx="${16 + i * 15}" cy="14.5" r="4.5" fill="${c}"/>`).join(''));
   parts.push(`<rect x="${W / 2 - 52}" y="7" width="104" height="15" rx="7" fill="var(--surface)"/>`, txt(W / 2, 18, m.app, { size: 10, anchor: 'middle', fill: 'var(--muted)' }));
   // sidebar
   parts.push(`<rect x="0.5" y="29" width="118" height="${HGT - 30}" fill="var(--surface-2)" opacity=".55"/>`);

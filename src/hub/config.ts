@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import dotenv from 'dotenv';
 import { CUSTOM_AGENT_ID, isAgentId, type AgentId } from '../shared/types.js';
@@ -36,6 +37,15 @@ function int(env: Env, name: string, fallback: number): number {
   return n;
 }
 
+/** One signed-in Claude account. A null configDir is the machine's default sign-in. */
+export interface WorkerAccount {
+  id: string;
+  label: string;
+  configDir: string | null;
+}
+
+export const DEFAULT_WORKER_ACCOUNT: WorkerAccount = { id: 'default', label: 'Default account', configDir: null };
+
 export interface HubConfig {
   port: number;
   publicUrl: string;
@@ -60,11 +70,26 @@ export interface HubConfig {
     ttlMs: number;
     maxInvalidPerWindow: number;
   };
-  router: {
-    provider: 'anthropic' | 'openai' | 'none';
+  /** Off until you turn it on: nothing leaves the hub for an AI to read before then. */
+  worker: {
+    enabled: boolean;
+    accounts: WorkerAccount[];
+    activeAccount: string;
+    /** Agents whose conversations the worker may read. */
+    sources: string[];
     model: string;
-    apiKey: string | null;
-    baseUrl: string | null;
+    /** For seeing a whole library at once, which takes more judgment than reading one chat. */
+    organizeModel: string;
+    maxRunsPerDay: number;
+    /** Separate from maxRunsPerDay, so a big import can't crowd out live conversations. */
+    importRunsPerDay: number;
+    bin: string | null;
+  };
+  /** Local times the hub emails Instinct an update, like 08:00. Empty means only on a debrief. */
+  instinctDigestTimes: string[];
+  /** The Obsidian vault the hub keeps its memory notes in. */
+  vaultPath: string;
+  router: {
     debounceMs: number;
     maxHops: number;
     tickMs: number;
@@ -107,11 +132,6 @@ export interface HubConfig {
 
 export function loadConfig(env = process.env): HubConfig {
   const port = int(env, 'PORT', 8787);
-  const anthropicKey = env.ANTHROPIC_API_KEY ?? null;
-  const openaiKey = env.OPENAI_API_KEY ?? null;
-  const provider = (env.ROUTER_PROVIDER as HubConfig['router']['provider'] | undefined) ??
-    (anthropicKey ? 'anthropic' : openaiKey ? 'openai' : 'none');
-
   const approvalChannel = (env.APPROVAL_CHANNEL as HubConfig['approval']['channel'] | undefined) ??
     (env.APPROVAL_IMESSAGE_HANDLE ? 'imessage' : env.APPROVAL_TELEGRAM_BOT_TOKEN ? 'telegram' : env.TWILIO_ACCOUNT_SID ? 'sms' : 'none');
 
@@ -150,15 +170,24 @@ export function loadConfig(env = process.env): HubConfig {
       ttlMs: int(env, 'APPROVAL_TTL_HOURS', 12) * 3600_000,
       maxInvalidPerWindow: int(env, 'APPROVAL_MAX_INVALID', 5),
     },
+    worker: {
+      enabled: env.WORKER_ENABLED === '1',
+      accounts: [DEFAULT_WORKER_ACCOUNT],
+      activeAccount: DEFAULT_WORKER_ACCOUNT.id,
+      sources: (env.WORKER_SOURCES ?? 'instinct,stanley,boardy').split(',').map((s) => s.trim()).filter(Boolean),
+      model: env.WORKER_MODEL ?? 'haiku',
+      organizeModel: env.WORKER_ORGANIZE_MODEL ?? 'sonnet',
+      maxRunsPerDay: int(env, 'WORKER_MAX_RUNS_PER_DAY', 50),
+      importRunsPerDay: int(env, 'IMPORT_MAX_RUNS_PER_DAY', 30),
+      bin: env.WORKER_CLAUDE_BIN ?? null,
+    },
+    instinctDigestTimes: (env.INSTINCT_DIGEST_TIMES ?? '08:00,21:00').split(',').map((t) => t.trim()).filter((t) => /^([01]\d|2[0-3]):[0-5]\d$/.test(t)),
+    vaultPath: env.VAULT_PATH ?? path.resolve(path.dirname(env.PGLITE_DIR ?? '.data/pglite'), 'vault'),
     router: {
-      provider,
-      model: env.ROUTER_MODEL ?? (provider === 'openai' ? 'gpt-4.1' : 'claude-sonnet-4-5'),
-      apiKey: provider === 'openai' ? openaiKey : anthropicKey,
-      baseUrl: env.ROUTER_BASE_URL ?? null,
       debounceMs: int(env, 'ROUTER_DEBOUNCE_MS', 10 * 60_000),
       maxHops: int(env, 'ROUTER_MAX_HOPS', 2),
       tickMs: int(env, 'ROUTER_TICK_MS', 30_000),
-      timeoutMs: int(env, 'ROUTER_TIMEOUT_MS', 60_000),
+      timeoutMs: int(env, 'ROUTER_TIMEOUT_MS', 180_000),
       maxAttempts: int(env, 'ROUTER_MAX_ATTEMPTS', 5),
     },
     delivery: {

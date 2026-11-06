@@ -6,7 +6,7 @@ import { ADAPTERS } from './adapters/index.js';
 import { loadConfig } from './config.js';
 import { openDb } from './db.js';
 import { Hub, type MacInstaller } from './hub.js';
-import { createLlm } from './llm.js';
+import { createWorker } from './worker.js';
 import { createSecretStore } from './secrets.js';
 import { createApp } from './server.js';
 import { Store } from './store.js';
@@ -31,24 +31,25 @@ async function main() {
   await store.ensureDefaultScopes();
   const secrets = await createSecretStore({ db, postgres: Boolean(cfg.databaseUrl), keyFile: path.join(path.dirname(cfg.pgliteDir), 'secret.key') });
 
-  const hub = new Hub(store, cfg, createTransports(cfg, store), createLlm(cfg.router), {
+  const hub = new Hub(store, cfg, createTransports(cfg, store), createWorker(cfg.worker, cfg.router.timeoutMs), {
     secrets,
     env: process.env,
     makeTransports: createTransports,
-    makeLlm: createLlm,
+    makeWorker: (c) => createWorker(c.worker, c.router.timeoutMs),
   });
   await hub.connections.load();
   await hub.reconfigure();
   if (process.platform === 'darwin') hub.macInstaller = localInstaller;
 
   log.info('hub.secret_store', { kind: secrets.kind });
+  log.info('hub.vault', { path: cfg.vaultPath });
   if (!hub.connections.hasOwnerPassword()) {
-    // The only way in before a password exists. Printed once per boot, never stored.
+    // The only way in before a password exists. Same token across restarts until a password is set.
     const url = `${cfg.publicUrl}/welcome?token=${hub.connections.setupToken}`;
     log.info('hub.setup', { url, hint: 'open this link to create your dashboard password' });
     if (process.stdout.isTTY) console.log(`\n  Agent Hub is running. Open this link to set it up:\n\n    ${url}\n`);
   }
-  if (!hub.llm) log.warn('hub.no_router_llm', { hint: 'add an Anthropic or OpenAI key in the dashboard; sessions are logged but not analysed' });
+  if (!hub.worker) log.info('hub.worker_off', { hint: 'turn on the background worker in Settings to have Claude Code read conversations on your subscription' });
   if (cfg.approval.channel === 'none') log.warn('hub.no_approval_channel', { hint: 'hand-offs can only be approved from the dashboard' });
   for (const a of Object.values(ADAPTERS)) {
     const c = a.configured(cfg);

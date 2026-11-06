@@ -108,7 +108,7 @@ describe('chat.db pipeline on Supabase', () => {
       seedThreads(s);
       await s.poll();
       // Malformed model output that quotes the conversation: parser errors must not carry it into logs.
-      s.llm.complete = async () => '{"summary": Ved has the assessment at 2pm and a climate founder intro}';
+      s.worker.complete = async () => '{"summary": Ved has the assessment at 2pm and a climate founder intro}';
       await s.hub.collectBursts(new Date());
       await s.hub.tick();
       await s.hub.idle();

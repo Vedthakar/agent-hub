@@ -5,6 +5,10 @@
   "description": "Make all of your AI agents act as one coherent unit: silent context sync + cross-agent triggers.",
   "type": "module",
   "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/Vedthakar/agent-hub.git" },
+  "homepage": "https://github.com/Vedthakar/agent-hub#readme",
+  "bugs": "https://github.com/Vedthakar/agent-hub/issues",
+  "keywords": ["ai-agents", "mcp", "obsidian", "second-brain", "imessage", "self-hosted", "claude", "chatgpt", "gemini"],
   "engines": {
     "node": ">=22.13"
   },
@@ -27,6 +31,8 @@
     "golden:rehash": "GOLDEN_REHASH=1 vitest run --project golden",
     "supabase:start": "supabase start -x studio,imgproxy,mailpit,storage-api,realtime,edge-runtime,logflare,vector,supavisor,postgres-meta,gotrue",
     "smoke": "tsx scripts/smoke.ts",
+    "tunnel": "bash scripts/tunnel.sh",
+    "hub:install": "bash scripts/install-hub.sh",
     "telegram:login": "tsx scripts/telegram-login.ts"
   },
   "dependencies": {
@@ -35,11 +41,13 @@
     "dotenv": "^18.0.9",
     "express": "^5.3.0",
     "express-rate-limit": "^8.7.2",
+    "fflate": "^0.8.3",
     "imapflow": "^2.10.0",
     "mailparser": "^3.14.1",
     "nodemailer": "^10.3.1",
     "postgres": "^4.0.0",
     "telegram": "^2.26.22",
+    "yaml": "^2.9.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {

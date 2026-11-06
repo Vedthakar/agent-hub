@@ -16,7 +16,7 @@ MUTANTS = [
     ("no obfuscation normalisation", "src/hub/guard.ts", "const variants = [text, normalizeForScan(text)];", "const variants = [text];", "test/security/scopes.test.ts"),
     ("context filtered by tags only", "src/hub/context.ts", "return !sensitiveTopicsIn(text).some((t) => deny.has(t));", "return true;", "test/security/scopes.test.ts"),
     ("loose Twilio sender match", "src/hub/server.ts", "fromOwner: sameHandle(from, t.userNumber)", "fromOwner: from.replace(/\\D/g, '').slice(-10) === (t.userNumber ?? '').replace(/\\D/g, '').slice(-10)", "test/security/approvals.test.ts"),
-    ("dashboard origin check removed", "src/hub/dashboard.ts", "if (req.get('sec-fetch-site') === 'cross-site' || (from !== null && from !== origin)) {", "if (false) {", "test/security/approvals.test.ts"),
+    ("dashboard origin check removed", "src/hub/dashboard.ts", "if (!allowed && (from !== null || req.get('sec-fetch-site') === 'cross-site')) {", "if (false) {", "test/security/approvals.test.ts"),
     ("refresh reuse not detected", "src/hub/oauth.ts", "      if (reused.length) {", "      if (false) {", "test/security/mcp-auth.test.ts"),
     ("consent not rate limited", "src/hub/server.ts", "app.post('/oauth/consent', consentLimit, ", "app.post('/oauth/consent', ", "test/security/mcp-auth.test.ts"),
     ("NUL bytes passed to Postgres", "src/hub/db.ts", "p.replace(/\\u0000/g, '') : p);", "p : p);", "test/security/platform.test.ts"),

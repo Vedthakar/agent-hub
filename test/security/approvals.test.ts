@@ -220,8 +220,14 @@ describe('approval spoofing', () => {
     expect((await post({ ...session, origin: 'https://evil.example' })).status).toBe(403);
     expect((await post({ cookie: session.cookie, referer: 'https://evil.example/page' })).status).toBe(403);
     expect((await post({ cookie: session.cookie, 'sec-fetch-site': 'cross-site' })).status).toBe(403);
+    // An opaque origin (editor preview pane) is only trusted when the hub isn't reached through a proxy or tunnel.
+    expect((await post({ ...session, origin: 'null', 'x-forwarded-for': '203.0.113.9' })).status).toBe(403);
     expect(await status(h, t.id)).toBe('proposed');
-    expect((await h.store.recentAudit()).filter((a) => a.action === 'dashboard.cross_origin_blocked')).toHaveLength(3);
+    expect((await h.store.recentAudit()).filter((a) => a.action === 'dashboard.cross_origin_blocked')).toHaveLength(4);
+    // Cursor / VS Code preview panes on a local hub.
+    for (const origin of ['null', 'vscode-webview://abc123']) {
+      expect((await fetch(`${h.url}/actions/resume`, { method: 'POST', redirect: 'manual', headers: { ...session, origin } })).status).not.toBe(403);
+    }
     expect((await post(session)).status).toBe(303);
     expect(await delivered(h, t.id)).toBe('sent');
   });

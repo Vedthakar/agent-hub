@@ -1,4 +1,4 @@
-import { isAgentId, type AgentId } from '../../shared/types.js';
+import { agentIds, isAgentId, type AgentId } from '../../shared/types.js';
 import { ADAPTERS } from '../adapters/index.js';
 import type { Hub } from '../hub.js';
 import type { EventRow } from '../store.js';
@@ -7,7 +7,7 @@ import { metaFor } from './agents.js';
 import { avatar, h, pill, relTime } from './layout.js';
 import { STATE_LABEL, STATE_TONE, agentCards, macStatus } from './status.js';
 
-const nameOf = (a: string) => (isAgentId(a) ? ADAPTERS[a].name : a);
+const nameOf = (a: string) => (isAgentId(a) ? ADAPTERS[a].name : a === 'owner' ? 'You' : a);
 const chip = (a: string, size = 28) => avatar(nameOf(a), metaFor(a as AgentId).color, size);
 
 function greeting(hub: Hub): string {
@@ -39,20 +39,20 @@ export async function todayFragment(hub: Hub): Promise<string> {
     ? proposed.map((task) => `<article class="card approval">
         <div class="between"><div class="row">${chip(task.origin_agent, 26)}<span class="muted">→</span>${chip(task.target_agent, 26)}<b>${h(nameOf(task.origin_agent))} → ${h(nameOf(task.target_agent))}</b></div>
           <code>${h(task.code)}</code></div>
-        <p style="margin:10px 0 4px;font-size:16px">${h(task.payload)}</p>
+        <p>${h(task.payload)}</p>
         <div class="muted small">${task.author === 'user' ? 'You decided this' : '<b>Agent-suggested</b>, not from your own messages'}${task.rationale ? ` · ${h(task.rationale)}` : ''}${task.approval_expires_at ? ` · expires ${h(t(task.approval_expires_at))}` : ''}</div>
         <div class="actions">
           <form method="post" action="/actions/task/${task.id}/approve" class="inline"><button class="btn ok big block">Approve</button></form>
           <form method="post" action="/actions/task/${task.id}/reject" class="inline"><button class="btn danger-ghost big block">Deny</button></form>
         </div></article>`).join('')
-    : `<div class="card flat center muted">Nothing waiting for you. Hand-offs between agents show up here (and as a text) for a yes or no.</div>`;
+    : `<div class="card flat center muted">Nothing waiting for you. Hand-offs between agents show up here for a yes or no.</div>`;
 
   const situation = [...live.map((s) => ({ ...s, upcoming: false })), ...upcoming.map((s) => ({ ...s, upcoming: true }))];
   const situationHtml = situation.length
     ? `<ul class="list">${situation.map((s) => `<li>${chip(s.source_agent, 26)}<div class="grow">${h(s.text)}${s.upcoming ? ` ${pill('upcoming', 'accent')}` : ''}
         <div class="muted small">${s.upcoming ? `from ${h(t(s.valid_from))} · ` : ''}until ${h(t(s.expires_at))}</div></div>
         <form method="post" action="/actions/situation/${s.id}/expire" class="inline"><button class="btn ghost sm" title="Clear this">Clear</button></form></li>`).join('')}</ul>`
-    : '<p class="muted mb0">Nothing yet. As you talk to your agents, what you’re up to shows up here.</p>';
+    : '<p class="muted mb0">Nothing yet. Tell your agents something above, or it shows up here as they save it.</p>';
 
   const byAgent = new Map<string, EventRow[]>();
   for (const e of events) byAgent.set(e.agent, [...(byAgent.get(e.agent) ?? []), e]);
@@ -74,8 +74,6 @@ export async function todayFragment(hub: Hub): Promise<string> {
     : '';
 
   return `
-  <div class="between" style="margin-bottom:18px"><div><h1>${h(greeting(hub))}</h1><div class="muted">${h(new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: cfg.timezone }).format(new Date()))}</div></div>
-    <form method="post" action="/actions/${paused ? 'resume' : 'pause'}" class="inline"${paused ? '' : ' data-confirm="Pause the hub? Agents stop getting context and tasks until you resume."'}><button class="btn ${paused ? 'ok' : 'secondary'}">${paused ? 'Resume hub' : 'Pause hub'}</button></form></div>
   ${paused ? '<div class="banner err"><div><b>The hub is paused.</b> No context or tasks go to any agent. Approval texts still work.</div></div>' : ''}
   <section><div class="section-head"><h2>Waiting for you</h2>${proposed.length ? pill(`${proposed.length}`, 'warn') : ''}</div>${approvals}</section>
   ${deadHtml}
@@ -85,11 +83,21 @@ export async function todayFragment(hub: Hub): Promise<string> {
       <div class="section-head"><h2>Right now</h2></div><section class="card">${situationHtml}</section>
       <div class="section-head"><h2>Health</h2><a class="small" href="/connections">Connections →</a></div><section class="card">${health}</section>
     </div>
-  </div>`;
+  </div>
+  <div class="quiet"><form method="post" action="/actions/${paused ? 'resume' : 'pause'}" class="inline"${paused ? '' : ' data-confirm="Pause the hub? Agents stop getting context and tasks until you resume."'}><button class="btn ${paused ? 'ok' : 'ghost'}">${paused ? 'Resume hub' : 'Pause hub'}</button></form></div>`;
+}
+
+function tellForm(): string {
+  const targets = agentIds().filter((a) => ADAPTERS[a].capabilities.canReceiveTasks).map((a) => `<option value="${h(a)}">Send to ${h(ADAPTERS[a].name)}</option>`).join('');
+  return `<form method="post" action="/actions/tell" class="tell">
+    <select name="kind" aria-label="What this is"><option value="now">Right now</option><option value="today">Today</option><option value="tomorrow">Tomorrow</option><option value="goal">Goal</option>${targets}</select>
+    <input name="text" required maxlength="500" placeholder="Tell your agents once" aria-label="What to tell your agents">
+    <button class="btn">Tell them</button></form>`;
 }
 
 export async function todayBody(hub: Hub): Promise<string> {
   const ob = hub.connections.onboarding;
-  const banner = ob.completed ? '' : `<div class="banner"><div><b>Finish setting up.</b> A few steps connect your Mac and agents.</div><a class="btn" href="/onboarding">Continue setup</a></div>`;
-  return `${banner}<div id="today" data-widget="today-refresh">${await todayFragment(hub)}</div>`;
+  const banner = ob.completed ? '' : `<div class="banner"><div><b>Finish setting up.</b> A few steps connect your agents.</div><a class="btn" href="/onboarding">Continue setup</a></div>`;
+  const hero = `<div class="hero"><div class="date">${h(new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: hub.cfg.timezone }).format(new Date()))}</div><h1>${h(greeting(hub))}</h1></div>`;
+  return `${banner}${hero}${tellForm()}<div id="today" data-widget="today-refresh">${await todayFragment(hub)}</div>`;
 }

@@ -7,11 +7,14 @@ import { connectPanel, keepAwakeBlock, macBlock } from './panels.js';
 
 export type Step = 'welcome' | 'mac' | 'keep-awake' | 'phone' | 'brain' | 'agents' | `agent-${string}` | 'finish';
 
-/** The wizard's steps for this hub, in order. Agent steps follow the agents picked in "agents". */
+/**
+ * The wizard's steps for this hub, in order. It asks which agents you use first, so someone with only Claude and
+ * ChatGPT never sees Mac setup. Mac steps and text approvals only matter for agents that live in iMessage.
+ */
 export function wizardSteps(hub: Hub): Step[] {
-  const s: Step[] = ['welcome', 'mac', 'keep-awake', 'phone'];
-  if (hub.connections.source('router.key') !== 'env') s.push('brain');
-  s.push('agents');
+  const s: Step[] = ['welcome', 'agents'];
+  if (hub.connections.onboarding.agents.some((a) => AGENT_META[a as keyof typeof AGENT_META]?.kind === 'imessage')) s.push('mac', 'keep-awake', 'phone');
+  if (hub.connections.source('worker.enabled') !== 'env') s.push('brain');
   for (const a of hub.connections.onboarding.agents) s.push(`agent-${a}`);
   s.push('finish');
   return s;
@@ -40,8 +43,8 @@ function welcome(hub: Hub): StepView {
     title: 'Welcome to Agent Hub',
     lead: 'Your AI agents each know a slice of your life. The hub quietly keeps them in sync, and lets them hand work to each other, with you approving every hand-off.',
     body: `<div class="card stack">
-      <div class="feature"><span class="dot">⇄</span><div><b>Silent context sync</b><div class="muted">When you tell Instinct you're shooting tomorrow, Stanley knows. Claude knows what you planned with ChatGPT.</div></div></div>
-      <div class="feature"><span class="dot">✓</span><div><b>You approve every hand-off</b><div class="muted">If one agent should ask another to do something, you get a text: reply Y or N.</div></div></div>
+      <div class="feature"><span class="dot">⇄</span><div><b>Silent context sync</b><div class="muted">Tell one agent you're shooting tomorrow and the others know. Each one knows what you planned with ChatGPT.</div></div></div>
+      <div class="feature"><span class="dot">✓</span><div><b>You approve every hand-off</b><div class="muted">If one agent should ask another to do something, you say yes or no first, here or by text.</div></div></div>
       <div class="feature"><span class="dot">🔒</span><div><b>Private by default</b><div class="muted">Each agent only sees the topics you allow. The hub never writes into your own chats, and never reads anything but the threads you pick.</div></div></div>
     </div>`,
     formBody: `<div class="card">${nameLock ? field('owner.name', 'What should your agents call you?', { locked: nameLock }) : field('owner.name', 'What should your agents call you?', { value: name, placeholder: 'Your first name', autocomplete: 'given-name' })}
@@ -80,17 +83,12 @@ function phone(hub: Hub): StepView {
 }
 
 function brain(hub: Hub): StepView {
-  const provider = hub.cfg.router.provider === 'openai' ? 'openai' : 'anthropic';
-  const saved = hub.connections.isSet('router.key');
   return {
-    title: 'Give the hub a brain',
-    lead: 'The hub uses an AI model to read what happened in each conversation and decide what other agents should know. Bring your own key. It costs cents a day.',
+    title: 'Let Claude read your chats (optional)',
+    lead: 'A background worker can read your Instinct, Stanley and Boardy chats and sort them into memory and tasks. It uses Claude Code on the Claude plan you already have: no API key and no extra bill. Skip this and everything else still works.',
     formBody: `<div class="card stack">
-      <div class="seg" style="grid-template-columns:1fr 1fr">
-        <label><input type="radio" name="router.provider" value="anthropic"${provider === 'anthropic' ? ' checked' : ''}> <b>Anthropic</b><span class="muted">Claude. Key from console.anthropic.com</span></label>
-        <label><input type="radio" name="router.provider" value="openai"${provider === 'openai' ? ' checked' : ''}> <b>OpenAI</b><span class="muted">Key from platform.openai.com</span></label></div>
-      ${field('router.key', 'API key', { type: 'password', secretSaved: saved, placeholder: 'sk-…', help: `Saved encrypted (${h(hub.connections.secrets?.label ?? 'secret store')}). Never shown again.` })}
-      ${saved ? '<div data-widget="test-router" class="stack"><div class="row"><button type="button" class="btn secondary">Test the key</button></div><div data-status class="hide"></div></div>' : ''}</div>`,
+      <label class="choice"><input type="checkbox" name="enabled" value="1"${hub.cfg.worker.enabled ? ' checked' : ''}><span class="grow"><b>Turn on the background worker</b><div class="muted small">Those chats go to Anthropic through your account. You can pick which ones and add more accounts in Settings.</div></span></label>
+      <p class="muted small mb0">Sign in once in Terminal: <code>claude auth login</code></p></div>`,
     skippable: true,
   };
 }
@@ -99,7 +97,7 @@ function agents(hub: Hub): StepView {
   const picked = new Set<string>(hub.connections.onboarding.agents.length ? hub.connections.onboarding.agents : []);
   return {
     title: 'Which agents do you use?',
-    lead: 'Pick the ones you have. We’ll set each up next, one at a time. Agents you don’t pick stay off.',
+    lead: 'Pick the ones you use. Start with one or two if you like. You can add more anytime, and agents you don’t pick stay off.',
     formBody: `<div class="stack">${AGENT_IDS.map((a) => `<label class="choice"><input type="checkbox" name="agent" value="${a}"${picked.has(a) ? ' checked' : ''}>
         ${avatar(ADAPTERS[a].name, AGENT_META[a].color, 36)}<span class="grow"><b>${h(ADAPTERS[a].name)}</b><div class="muted small">${h(AGENT_META[a].tagline)}</div></span></label>`).join('')}
       <p class="muted small">Using something else? Add a custom agent from Connections later.</p></div>`,
@@ -149,7 +147,7 @@ export function renderStep(hub: Hub, step: Step, revealed?: Record<string, strin
   const html = `<div class="wizard">
   <div class="between"><span class="kicker">Step ${i + 1} of ${all.length}</span>${step === 'welcome' ? `<form method="post" action="/onboarding/skip-all" class="inline"><button class="btn ghost sm">Skip setup</button></form>` : ''}</div>
   <div class="progress" aria-hidden="true"><i style="width:${pct}%"></i></div>
-  <h1>${h(v.title)}</h1>${v.lead ? `<p class="muted" style="font-size:16px;margin-top:6px">${h(v.lead)}</p>` : ''}
+  <h1>${h(v.title)}</h1>${v.lead ? `<p class="muted">${h(v.lead)}</p>` : ''}
   ${v.body ?? ''}
   <form method="post" action="/onboarding/${h(step)}">${hidden('step', step)}${v.formBody ?? ''}
     <div class="wizard-foot">${prev ? `<a class="btn ghost" href="/onboarding/${h(prev)}">Back</a>` : '<span></span>'}

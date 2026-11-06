@@ -154,6 +154,22 @@ describe('MCP authentication and authorization', () => {
     expect((await rpc(h.url, 'grok-token')).status).toBe(200);
   });
 
+  it('MA-11 an agent’s own password connects only that agent, replaces the owner’s for it, and can’t open the dashboard', async () => {
+    const h = await secureHub();
+    const { client_id } = await register(h.url);
+    const pw = 'claude-connect-pass';
+    await h.hub.connections.setAgentPassword('claude', pw);
+    expect((await consent(h.url, client_id, 'c', { agent: 'claude', password: pw })).status).toBe(302);
+    expect((await consent(h.url, client_id, 'c', { agent: 'claude' })).status).toBe(401); // the owner's no longer works for it
+    expect((await consent(h.url, client_id, 'c', { agent: 'chatgpt', password: pw })).status).toBe(401);
+    expect((await consent(h.url, client_id, 'c', { agent: 'chatgpt' })).status).toBe(302); // no password of its own yet
+    const login = await fetch(`${h.url}/login`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded', origin: h.url }, body: new URLSearchParams({ password: pw }) });
+    expect(login.status).toBe(401);
+    expect(JSON.stringify(await h.store.db.query('SELECT * FROM settings'))).not.toContain(pw);
+    await h.hub.connections.removeAgentPassword('claude');
+    expect((await consent(h.url, client_id, 'c', { agent: 'claude' })).status).toBe(302);
+  });
+
   it('MA-07 the consent form is rate limited against password guessing', async () => {
     const h = await secureHub({ RATE_LIMIT_LOGIN_PER_15MIN: '3' });
     const { client_id } = await register(h.url);

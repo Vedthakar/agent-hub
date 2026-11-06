@@ -138,7 +138,7 @@ describe('scopes are enforced at the delivery layer', () => {
   it('SC-07 the router-proposal path blocks too, and a blocked task can never be approved later', async () => {
     const h = await secureHub();
     const ev = await h.store.insertEvent({ agent: 'instinct', occurredAt: new Date(), author: 'user', rawExcerpt: 'x', summary: '', topics: [], kind: 'chat' });
-    h.llm.next.push(() => ({ summary: 's', tasks: [{ target_agent: 'boardy', payload: 'Tell Boardy about my midterm', topics: ['networking'], evidence: [] }] }));
+    h.worker.next.push(() => ({ summary: 's', tasks: [{ target_agent: 'boardy', payload: 'Tell Boardy about my midterm', topics: ['networking'], evidence: [] }] }));
     await h.hub.routePending();
     const [t] = await h.store.recentTasks(1);
     expect(t.status).toBe('blocked');

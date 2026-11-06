@@ -4,13 +4,20 @@ import { ADAPTERS } from './adapters/index.js';
 import type { AdapterContext } from './adapters/types.js';
 import { Approvals, type CommandOutcome, type InboundCommand } from './approvals.js';
 import type { HubConfig } from './config.js';
-import { debriefActive, noteDebriefStart, processPendingDebrief, queueDigestNow } from './debrief.js';
+import { brainUrl } from './brain.js';
+import { debriefActive, noteDebriefStart, processPendingDebrief, queueDigestNow, scheduleDigest } from './debrief.js';
+import { readInstinctMail } from './instinctMail.js';
+import { checkEmailLogin } from './transports/email.js';
 import { dispatchApproved } from './dispatch.js';
-import { LlmError, backoffMs, type Llm } from './llm.js';
+import { backoffMs } from './backoff.js';
+import { Importer } from './importer.js';
+import { VaultSync } from './vault.js';
+import { WorkerError, WorkerUnavailable, type Worker } from './worker.js';
 import { routeEvent } from './router.js';
+import { localDateKey } from './tz.js';
 import { REPLY_ATTRIBUTION_WINDOW_MS } from './tasks.js';
 import { normalizeHandle, sameHandle } from '../shared/handles.js';
-import type { RawMessageRow, Store } from './store.js';
+import type { EventRow, RawMessageRow, Store } from './store.js';
 import type { Transports } from './transports/index.js';
 import { Connections } from './connections.js';
 import type { SecretStore } from './secrets.js';
@@ -23,7 +30,7 @@ export interface HubOptions {
   /** The environment the config was loaded from; settings it defines are locked in the dashboard. */
   env?: Record<string, string | undefined>;
   makeTransports?: (cfg: HubConfig, store: Store) => Transports;
-  makeLlm?: (cfg: HubConfig['router']) => Llm | null;
+  makeWorker?: (cfg: HubConfig) => Worker | null;
 }
 
 export type MacInstaller = (hubUrl: string, pairingCode: string) => Promise<void>;
@@ -46,11 +53,18 @@ export class Hub {
   private ticking: Promise<void> | null = null;
   private rerun = false;
   private routing: Promise<number> = Promise.resolve(0);
+  readonly vault: VaultSync;
+  readonly importer: Importer;
+  /** Set when the worker's account can't run; events wait instead of burning retries. */
+  workerPausedUntil = 0;
+  workerProblem: string | null = null;
   lastTick: { at: Date; ok: boolean; error?: string; report?: TickReport } | null = null;
 
   readonly connections: Connections;
   /** Drives the Stanley login on the Connections page; replaced with a fake in tests. */
   telegramLogin: TelegramLoginDriver = telegramLoginDriver();
+  /** Tries an email login without sending anything; replaced in tests. */
+  checkEmailLogin: (smtpUrl: string) => Promise<'ok' | 'rejected' | 'unknown'> = checkEmailLogin;
   /** Installs the daemon when the hub itself runs on the Mac; replaced in tests. */
   macInstaller: MacInstaller | null = null;
 
@@ -58,18 +72,20 @@ export class Hub {
     readonly store: Store,
     readonly cfg: HubConfig,
     readonly transports: Transports,
-    public llm: Llm | null,
+    public worker: Worker | null,
     private opts: HubOptions = {},
   ) {
     this.ctx = { store, cfg, transports };
     this.approvals = new Approvals({ store, cfg, transports, kick: () => this.kick() });
     this.connections = new Connections(store, opts.secrets ?? null, cfg, opts.env ?? {});
     this.connections.onChange = () => this.reconfigure();
+    this.importer = new Importer(this);
+    this.vault = new VaultSync(store, cfg, (text) => this.approvals.ownerCommand(text, 'vault'));
   }
 
   /**
-   * Re-reads settings changed in the dashboard. With factories (production) the transports and router
-   * LLM are rebuilt from the new config; without them (tests) the injected fakes stay.
+   * Re-reads settings changed in the dashboard. With factories (production) the transports and the
+   * worker are rebuilt from the new config; without them (tests) the injected fakes stay.
    */
   async reconfigure(): Promise<void> {
     this.connections.apply();
@@ -78,7 +94,9 @@ export class Hub {
       await this.transports.telegramUser?.close?.().catch(() => undefined);
       Object.assign(this.transports, next);
     }
-    if (this.opts.makeLlm) this.llm = this.opts.makeLlm(this.cfg.router);
+    if (this.opts.makeWorker) this.worker = this.opts.makeWorker(this.cfg);
+    this.workerPausedUntil = 0;
+    this.workerProblem = null;
   }
 
   // ---------------------------------------------------------------- daemon
@@ -91,7 +109,7 @@ export class Hub {
     return { watchHandles: [...handles], approvalHandle, pollIntervalMs: 5000, paused };
   }
 
-  private agentForHandle(handle: string): AgentId | null {
+  agentForHandle(handle: string): AgentId | null {
     const n = normalizeHandle(handle);
     for (const [agent, h] of Object.entries(this.cfg.imessageHandles)) {
       if (h && normalizeHandle(h) === n) return agent as AgentId;
@@ -106,6 +124,7 @@ export class Hub {
   async ingestDaemon(messages: DaemonMessage[]): Promise<{ accepted: number; commands: number }> {
     let accepted = 0;
     let commands = 0;
+    const filed: DaemonMessage[] = [];
     const approvalHandle = this.cfg.approval.channel === 'imessage' ? this.cfg.approval.imessageHandle : null;
     const ordered = [...messages].sort((a, b) => a.rowid - b.rowid);
     for (const m of ordered) {
@@ -132,8 +151,15 @@ export class Hub {
       const inserted = await this.store.insertRawMessages([{ agent, externalId: m.guid, channel: 'imessage', author, text, sentAt }]);
       if (!inserted.length) continue;
       accepted++;
+      filed.push({ ...m, text });
       await this.store.touchRead(agent);
       if (agent === 'instinct' && author === 'user' && (await noteDebriefStart(this.ctx, inserted[0]))) this.kick();
+    }
+    // The same lines become that day's note in the vault, so Obsidian stays current without waiting for the old-chat import.
+    if (filed.length) {
+      await this.importer.addHistory(filed, (handle) => this.agentForHandle(handle)).catch(async (err) => {
+        await this.store.audit('hub', 'import.step_failed', { error: (err as Error).message.slice(0, 200) });
+      });
     }
     return { accepted, commands };
   }
@@ -192,19 +218,57 @@ export class Hub {
     return this.routing;
   }
 
+  /** Rules first: the worker only spends tokens on what a rule can't settle. */
+  private needsWorker(event: EventRow): boolean {
+    if (event.kind === 'chat') return this.cfg.worker.sources.includes(event.agent);
+    // A session the agent summarised itself is already structured, unless it passed along decisions or an excerpt.
+    return event.kind === 'session' && event.raw_excerpt !== `Agent's summary: ${event.summary}`;
+  }
+
+  /** A day's worth of worker runs is capped so agents reacting to each other can't drain your plan. */
+  private async takeWorkerRun(now: Date): Promise<boolean> {
+    const date = localDateKey(now, this.cfg.timezone);
+    const used = await this.store.getSetting<{ date: string; runs: number }>('worker.usage', { date, runs: 0 });
+    const runs = used.date === date ? used.runs : 0;
+    if (runs >= this.cfg.worker.maxRunsPerDay) return false;
+    await this.store.setSetting('worker.usage', { date, runs: runs + 1 });
+    return true;
+  }
+
+  async workerUnavailable(err: WorkerUnavailable, now: Date): Promise<void> {
+    this.workerPausedUntil = now.getTime() + (err.retryAfterMs ?? 30 * 60_000);
+    const changed = this.workerProblem !== err.reason;
+    this.workerProblem = err.reason;
+    log.warn('worker.unavailable', { reason: err.reason });
+    if (!changed) return;
+    await this.store.audit('hub', 'worker.unavailable', { reason: err.reason });
+    await this.approvals.notifyUser(`Hub: ${err.message}. Conversations are waiting and nothing is lost. Switch accounts in Settings, or it retries by itself.`);
+  }
+
   /**
    * Failures are persisted on the event (attempts, last error, next retry time), retried with exponential
-   * backoff (honouring Retry-After), and after ROUTER_MAX_ATTEMPTS the event moves to the dead-letter queue.
-   * A failing event never blocks the ones behind it, and nothing here throws out of the tick.
+   * backoff (honouring any suggested wait), and after ROUTER_MAX_ATTEMPTS the event moves to the dead-letter
+   * queue. A failing event never blocks the ones behind it, and nothing here throws out of the tick.
    */
   private async routePendingNow(now: Date): Promise<number> {
     let routed = 0;
     for (const event of await this.store.unroutedEvents(now)) {
       try {
+        const wanted = this.worker !== null && this.needsWorker(event);
+        // Paused or out of runs for today: the event stays queued and costs nothing.
+        if (wanted && (now.getTime() < this.workerPausedUntil || !(await this.takeWorkerRun(now)))) continue;
         const debrief = event.agent === 'instinct' && (await debriefActive(this.ctx, new Date(event.occurred_at)));
-        await routeEvent({ store: this.store, cfg: this.cfg, llm: this.llm }, event, { debrief });
+        await routeEvent({ store: this.store, cfg: this.cfg, worker: wanted ? this.worker : null }, event, { debrief });
+        if (wanted) {
+          this.workerProblem = null;
+          await this.store.audit('hub', 'worker.run', { event: event.id, usage: this.worker?.lastUsage ?? null });
+        }
         routed++;
       } catch (err) {
+        if (err instanceof WorkerUnavailable) {
+          await this.workerUnavailable(err, now);
+          continue;
+        }
         const error = err instanceof Error ? err.message : String(err);
         const attempt = event.route_attempts + 1;
         log.warn('router.failed', { event: event.id, attempt, error });
@@ -214,7 +278,7 @@ export class Hub {
           await this.store.deadLetterEvent(event.id, error);
           continue;
         }
-        const hint = err instanceof LlmError ? err.retryAfterMs : null;
+        const hint = err instanceof WorkerError ? err.retryAfterMs : null;
         const wait = Math.max(hint ?? 0, backoffMs(attempt, ROUTE_BACKOFF_BASE_MS));
         await this.store.recordRouteFailure(event.id, error, new Date(Date.now() + wait));
       }
@@ -242,12 +306,21 @@ export class Hub {
 
   async pollReads(): Promise<number> {
     let read = 0;
+    const scopes = await this.store.scopes();
     for (const a of Object.values(ADAPTERS)) {
+      if (scopes.get(a.id)?.enabled === false) continue;
       try {
         read += await a.readEvents(this.ctx);
       } catch (err) {
         await this.store.touchDelivery(a.id, `read failed: ${String(err)}`);
         await this.store.audit('hub', 'adapter.read_failed', { agent: a.id, error: String(err) });
+      }
+    }
+    if (scopes.get('instinct')?.enabled !== false) {
+      try {
+        read += await readInstinctMail(this.ctx, brainUrl(this));
+      } catch (err) {
+        await this.store.audit('hub', 'instinct.mail_failed', { error: String(err).slice(0, 200) });
       }
     }
     if (this.cfg.approval.channel === 'telegram' && this.transports.telegramBot) {
@@ -278,10 +351,13 @@ export class Hub {
             report.read = await this.pollReads();
             report.events = await this.collectBursts();
             report.routed = await this.routePending();
-            report.digest = await processPendingDebrief(this.ctx, () => this.routePending());
+            await scheduleDigest(this.ctx);
+            report.digest = await processPendingDebrief(this.ctx, () => this.routePending(), brainUrl(this));
             report.expired = await this.approvals.sweepExpired();
             report.asked = await this.requestApprovals();
             report.sent = await this.dispatchApproved();
+            await this.vault.sync();
+            this.importer.kick();
             this.lastTick = { at: new Date(), ok: true, report };
           } catch (err) {
             this.lastTick = { at: new Date(), ok: false, error: String(err), report };
@@ -299,6 +375,7 @@ export class Hub {
   async idle(): Promise<void> {
     await new Promise((r) => setImmediate(r));
     while (this.ticking) await this.ticking.catch(() => undefined);
+    await this.importer.idle();
   }
 
   /** Run a tick soon (after MCP writes) instead of waiting for the next interval. */
@@ -309,6 +386,11 @@ export class Hub {
   }
 
   start(): () => void {
+    void this.store.requeueTransientFailures().catch((err) => log.warn('router.requeue_failed', { error: String(err) }));
+    void this.store.releaseHistoryClaims().catch((err) => log.warn('import.history_release_failed', { error: String(err) }));
+    void this.store.getSetting<{ state?: string; afterRowId?: number } | null>('import.history', null).then((hist) => {
+      log.info('import.history_state', { state: hist?.state ?? 'none', afterRowId: hist?.afterRowId ?? null });
+    }).catch((err) => log.warn('import.history_state_failed', { error: String(err) }));
     const timer = setInterval(() => {
       this.tick().catch((err) => log.error('hub.tick_failed', { error: String(err) }));
     }, this.cfg.router.tickMs);

@@ -19,7 +19,7 @@ async function waitJob(id){for(var i=0;i<120;i++){var j=await api('/api/jobs/'+i
 function busy(btn,on){if(!btn)return;btn.disabled=on;if(on){btn.dataset.label=btn.textContent;btn.innerHTML='<span class="spinner"></span>'+esc(btn.dataset.label)}else if(btn.dataset.label){btn.textContent=btn.dataset.label}}
 
 $$('[data-theme-toggle]').forEach(function(b){b.addEventListener('click',function(){
-  var root=document.documentElement;var cur=root.dataset.theme||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+  var root=document.documentElement;var cur=root.dataset.theme||'light';
   var next=cur==='dark'?'light':'dark';root.dataset.theme=next;try{localStorage.setItem('theme',next)}catch(e){}})});
 
 document.addEventListener('click',function(e){var b=e.target.closest&&e.target.closest('[data-copy]');if(!b)return;var t=$(b.getAttribute('data-copy'));if(!t)return;
@@ -81,7 +81,7 @@ W['test-connection']=function(el){var btn=$('button',el),s=$('[data-status]',el)
   catch(e){say(s,'err',esc(e.message))}finally{busy(btn,false)}})};
 W['test-email']=function(el){var btn=$('button',el),s=$('[data-status]',el);btn.addEventListener('click',function(){busy(btn,true);say(s,'','Sending a test email to yourself…',true);
   api('/api/email/test',{}).then(function(r){say(s,'ok','Sent ✓ to '+esc(r.to)+'. Check your inbox.')}).catch(function(e){say(s,'err',esc(e.message))}).finally(function(){busy(btn,false)})})};
-W['test-router']=function(el){var btn=$('button',el),s=$('[data-status]',el);btn.addEventListener('click',function(){busy(btn,true);say(s,'','Checking the key…',true);
+W['test-router']=function(el){var btn=$('button',el),s=$('[data-status]',el);btn.addEventListener('click',function(){busy(btn,true);say(s,'','Checking…',true);
   api('/api/router/test',{}).then(function(r){say(s,'ok','Works ✓ ('+esc(r.model)+')')}).catch(function(e){say(s,'err',esc(e.message))}).finally(function(){busy(btn,false)})})};
 W['telegram-login']=function(el){var loginId=null,s=$('[data-status]',el);
   var show=function(k){$$('[data-tg-step]',el).forEach(function(f){f.classList.toggle('hide',f.getAttribute('data-tg-step')!==k)})};

@@ -41,7 +41,8 @@ export function createImap(cfg: HubConfig['imap']): ImapTransport | null {
         // UIDVALIDITY changed: old UIDs are meaningless. Start from the current end instead of re-reading everything.
         if (knownValidity && knownValidity !== uidValidity) return { messages: [], uidValidity };
         const messages: InboundEmail[] = [];
-        for await (const msg of client.fetch(`${lastUid + 1}:*`, { uid: true, source: true }, { uid: true })) {
+        // On first contact only the newest message is needed, to mark the end of the mailbox.
+        for await (const msg of client.fetch(lastUid === 0 ? '*' : `${lastUid + 1}:*`, { uid: true, source: true }, { uid: true })) {
           if (msg.uid <= lastUid || !msg.source) continue;
           const parsed = await simpleParser(msg.source);
           const text = parsed.text ?? '';

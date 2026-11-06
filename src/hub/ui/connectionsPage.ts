@@ -30,10 +30,10 @@ function card(c: AgentCard): string {
 export async function connectionsGrid(hub: Hub): Promise<string> {
   const cards = await agentCards(hub);
   const ready = cards.filter((c) => c.state === 'connected').length;
-  return `<div class="between" style="margin-bottom:18px"><div><h1>Connections</h1><div class="muted">${ready} of ${cards.length} agents connected</div></div>
+  return `<div class="hero"><div><h1>Connections</h1><div class="muted">${ready} of ${cards.length} agents connected</div></div>
     <a class="btn secondary" href="/settings#mac">Your Mac</a></div>
   <div class="grid">${cards.map(card).join('')}
-    <a class="card agent-card add" href="/connections/new"><span style="font-size:28px;line-height:1">+</span><b>Add custom agent</b><span class="small">Any agent that can call MCP or a webhook</span></a></div>`;
+    <a class="card agent-card add" href="/connections/new"><span style="line-height:1">+</span><b>Add custom agent</b><span class="small">Any agent that can call MCP or a webhook</span></a></div>`;
 }
 
 function settingsBlock(agent: AgentId, scope: Scope | undefined, back: string): string {
@@ -60,9 +60,8 @@ export async function connectionDetail(hub: Hub, agent: AgentId, ctx: PanelCtx):
   const meta = metaFor(agent);
   const scope = await hub.store.scope(agent);
   const custom = agent.startsWith('custom-');
-  return `<p><a href="/connections" class="small">← All connections</a></p>
-  <div class="row" style="margin-bottom:18px;gap:16px">${avatar(c.name, meta.color, 56)}<div class="grow"><h1>${h(c.name)}</h1><div class="muted">${h(custom ? ADAPTERS[agent].capabilities.profile : meta.tagline)}</div></div>
-    <div style="text-align:right">${pill(STATE_LABEL[c.state], STATE_TONE[c.state])}<div class="muted small" style="margin-top:4px">${c.lastEventAt ? `Last event ${h(relTime(c.lastEventAt))}` : 'No events yet'}</div></div></div>
+  return `<p class="mb0"><a href="/connections" class="small">← All connections</a></p><div style="height:48px"></div><div class="detail-head">${avatar(c.name, meta.color, 56)}<div><h1>${h(c.name)}</h1><div class="muted">${h(custom ? ADAPTERS[agent].capabilities.profile : meta.tagline)}</div></div>
+    <div class="row">${pill(STATE_LABEL[c.state], STATE_TONE[c.state])}<div class="muted small">${c.lastEventAt ? `Last event ${h(relTime(c.lastEventAt))}` : 'No events yet'}</div></div></div>
   ${c.missing.length ? `<div class="banner warn"><div><b>To finish connecting:</b> ${c.missing.map(h).join(' · ')}</div></div>` : ''}
   ${c.state === 'error' ? `<div class="banner err"><div><b>Problem:</b> ${h(c.detail)}</div></div>` : ''}
   <div class="section-head"><h2>Connect</h2></div>

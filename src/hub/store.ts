@@ -25,6 +25,8 @@ export interface EventRow {
   caused_by_task_id: number | null;
   hop: number;
   routed_at: Date | null;
+  /** What triage decided: memory, task, both, or just a log line. */
+  triage: 'memory' | 'task' | 'both' | 'log' | null;
   route_attempts: number;
   next_route_at: Date | null;
   last_error: string | null;
@@ -244,8 +246,8 @@ export class Store {
     return row;
   }
 
-  async updateEventAnalysis(id: number, summary: string, topics: string[]): Promise<void> {
-    await this.db.query('UPDATE events SET summary = $2, topics = $3, routed_at = now() WHERE id = $1', [id, summary, topics]);
+  async updateEventAnalysis(id: number, summary: string, topics: string[], triage: EventRow['triage'] = 'log'): Promise<void> {
+    await this.db.query('UPDATE events SET summary = $2, topics = $3, triage = $4, routed_at = now() WHERE id = $1', [id, summary, topics, triage]);
   }
 
   /** Events due for routing: not routed, not dead-lettered, and past any retry backoff. */
@@ -316,7 +318,7 @@ export class Store {
     if (s.slot) {
       await this.db.query(
         `UPDATE situation SET superseded_by = $1, superseded_at = now()
-         WHERE slot = $2 AND id <> $1 AND superseded_at IS NULL AND origin_event_id IS DISTINCT FROM $3::bigint`,
+         WHERE slot = $2 AND id <> $1 AND superseded_at IS NULL AND ($3::bigint IS NULL OR origin_event_id IS DISTINCT FROM $3::bigint)`,
         [row.id, s.slot, s.originEventId],
       );
     }
@@ -341,6 +343,22 @@ export class Store {
     await this.db.query(
       'INSERT INTO facts (text, kind, topics, source_agent, author, origin_event_id) VALUES ($1, $2, $3, $4, $5, $6)',
       [f.text, f.kind, f.topics, f.sourceAgent, f.author, f.originEventId],
+    );
+  }
+
+  async updateFactText(id: number, text: string): Promise<void> {
+    await this.db.query("UPDATE facts SET text = $2, author = 'user' WHERE id = $1 AND active", [id, text]);
+  }
+
+  async updateSituationText(id: number, text: string): Promise<void> {
+    await this.db.query("UPDATE situation SET text = $2, author = 'user' WHERE id = $1 AND superseded_at IS NULL", [id, text]);
+  }
+
+  /** Live now, or planned to become live. */
+  async currentAndUpcomingSituation(now = new Date()): Promise<SituationRow[]> {
+    return this.db.query(
+      'SELECT * FROM situation WHERE superseded_at IS NULL AND (expires_at IS NULL OR expires_at > $1) ORDER BY valid_from LIMIT 200',
+      [now],
     );
   }
 
@@ -712,6 +730,175 @@ export class Store {
     return rows[0];
   }
 
+  // ---------- imported history ----------
+
+  /**
+   * Returns true if this is new or changed. Unchanged chats keep their folder and cost nothing.
+   * `reprocess` reads a changed chat again (a newer export). `keep` only refreshes the note (a live message
+   * appended to a day). `defer` holds a history page out of the sorter until the import finishes, so a day
+   * isn't filed from its first few lines.
+   */
+  async upsertArchive(
+    a: { source: string; externalId: string; title: string; messages: ArchiveMessage[]; hash: string; startedAt: Date | null; updatedAt: Date | null; kind?: string; folder?: string | null; summary?: string | null },
+    mode: 'reprocess' | 'keep' | 'defer' = 'reprocess',
+  ): Promise<boolean> {
+    const ruled = a.kind && a.kind !== 'chat';
+    const deferred = mode === 'defer' && !ruled;
+    const rows = await this.db.query(
+      `INSERT INTO archive (source, external_id, title, messages, hash, started_at, updated_at, kind, folder, summary, read_version, organized_at, sorted_at, sort_attempts)
+       VALUES ($1, $2, $3, $4::text::jsonb, $5, $6, $7, $8, $9, $10, $11, $12, $12, $13)
+       ON CONFLICT (source, external_id) DO UPDATE
+         SET title = EXCLUDED.title, messages = EXCLUDED.messages, hash = EXCLUDED.hash, updated_at = EXCLUDED.updated_at, needs_write = true, checked_at = NULL,
+             read_version = CASE $14
+               WHEN 'keep' THEN archive.read_version
+               WHEN 'defer' THEN 99
+               ELSE CASE WHEN EXCLUDED.read_version >= 99 THEN EXCLUDED.read_version ELSE 0 END
+             END,
+             organized_at = CASE $14
+               WHEN 'keep' THEN archive.organized_at
+               WHEN 'defer' THEN NULL
+               ELSE EXCLUDED.organized_at
+             END,
+             sort_attempts = CASE $14
+               WHEN 'keep' THEN archive.sort_attempts
+               WHEN 'defer' THEN 99
+               ELSE CASE WHEN EXCLUDED.read_version >= 99 THEN archive.sort_attempts ELSE 0 END
+             END
+         WHERE archive.hash <> EXCLUDED.hash
+       RETURNING id`,
+      [
+        a.source,
+        a.externalId,
+        a.title,
+        toJson(a.messages),
+        a.hash,
+        a.startedAt,
+        a.updatedAt,
+        a.kind ?? 'chat',
+        a.folder ?? null,
+        a.summary ?? null,
+        deferred || ruled ? 99 : 0,
+        a.kind === 'memory' ? new Date() : null,
+        deferred ? 99 : 0,
+        mode,
+      ],
+    );
+    return rows.length > 0;
+  }
+
+  /** History held these back. Let the sorter read them now that every page is in. */
+  async releaseDeferredArchive(): Promise<void> {
+    await this.db.query(`UPDATE archive SET read_version = 0, organized_at = NULL, sort_attempts = 0 WHERE read_version = 99 AND sort_attempts = 99`);
+  }
+
+  /** Titles and summaries only, newest first, for Instinct's digest. */
+  recentNotes(limit = 40): Promise<Pick<ArchiveRow, 'title' | 'summary' | 'topics' | 'source' | 'updated_at'>[]> {
+    return this.db.query(
+      `SELECT title, summary, topics, source, updated_at FROM archive
+       ORDER BY updated_at DESC NULLS LAST, id DESC LIMIT $1`,
+      [limit],
+    );
+  }
+
+  async archiveByKey(source: string, externalId: string): Promise<ArchiveRow | undefined> {
+    const rows = await this.db.query<ArchiveRow>('SELECT * FROM archive WHERE source = $1 AND external_id = $2', [source, externalId]);
+    return rows[0];
+  }
+
+  async archiveById(id: number): Promise<ArchiveRow | undefined> {
+    const rows = await this.db.query<ArchiveRow>('SELECT * FROM archive WHERE id = $1', [id]);
+    return rows[0];
+  }
+
+  archiveToWrite(limit: number): Promise<ArchiveRow[]> {
+    return this.db.query('SELECT * FROM archive WHERE needs_write ORDER BY id LIMIT $1', [limit]);
+  }
+
+  async markArchiveWritten(id: number, vaultPath: string): Promise<void> {
+    await this.db.query('UPDATE archive SET vault_path = $2, needs_write = false WHERE id = $1', [id, vaultPath]);
+  }
+
+  /** Oldest first, and a chat that keeps failing stops being retried after a few tries. */
+  archiveToRead(limit: number, version: number): Promise<ArchiveRow[]> {
+    return this.db.query('SELECT * FROM archive WHERE read_version < $2 AND sort_attempts < 3 ORDER BY id LIMIT $1', [limit, version]);
+  }
+
+  async markArchiveRead(id: number, folder: string | null, topics: string[], summary: string, version: number): Promise<void> {
+    await this.db.query('UPDATE archive SET folder = $2, topics = $3, summary = $4, read_version = $5, sorted_at = now(), needs_write = true, sort_attempts = 0 WHERE id = $1', [id, folder, topics, summary, version]);
+  }
+
+  archiveToOrganize(limit: number): Promise<ArchiveRow[]> {
+    return this.db.query('SELECT * FROM archive WHERE organized_at IS NULL AND sort_attempts < 3 ORDER BY id LIMIT $1', [limit]);
+  }
+
+  async markArchiveOrganized(id: number, folder: string | null, topics: string[], rewrite: boolean): Promise<void> {
+    await this.db.query('UPDATE archive SET folder = $2, topics = $3, organized_at = now(), sorted_at = COALESCE(sorted_at, now()), needs_write = $4 OR needs_write, sort_attempts = 0, checked_at = NULL WHERE id = $1', [id, folder, topics, rewrite]);
+  }
+
+  /** "Organize again": forgets the folder tree so the next pass builds a new one. Memory files stay where they are. */
+  async resetArchiveOrganization(): Promise<void> {
+    await this.db.query("UPDATE archive SET organized_at = NULL, sort_attempts = 0 WHERE kind <> 'memory'");
+  }
+
+  /** Just what index notes need, so they don't load every message. */
+  archiveIndex(): Promise<Pick<ArchiveRow, 'id' | 'title' | 'folder' | 'summary' | 'vault_path' | 'topics' | 'started_at' | 'freshness' | 'freshness_note'>[]> {
+    return this.db.query('SELECT id, title, folder, summary, vault_path, topics, started_at, freshness, freshness_note FROM archive ORDER BY started_at DESC NULLS LAST, id DESC');
+  }
+
+  async bumpArchiveAttempts(ids: number[]): Promise<void> {
+    if (ids.length) await this.db.query('UPDATE archive SET sort_attempts = sort_attempts + 1 WHERE id = ANY($1::bigint[])', [ids]);
+  }
+
+  async archiveFolders(limit = 80): Promise<string[]> {
+    const rows = await this.db.query<{ folder: string }>('SELECT folder FROM archive WHERE folder IS NOT NULL GROUP BY folder ORDER BY count(*) DESC LIMIT $1', [limit]);
+    return rows.map((r) => r.folder);
+  }
+
+  /** The next folder with anything new to judge. Waits until sorting has finished, so it sees final folders. */
+  async folderToCheck(): Promise<string | null> {
+    const rows = await this.db.query<{ folder: string }>(
+      `SELECT folder FROM archive
+       WHERE folder IS NOT NULL AND source <> 'profile' AND checked_at IS NULL AND organized_at IS NOT NULL
+       GROUP BY folder ORDER BY count(*) DESC, folder LIMIT 1`,
+    );
+    return rows[0]?.folder ?? null;
+  }
+
+  archiveInFolder(folder: string, limit: number): Promise<ArchiveRow[]> {
+    return this.db.query('SELECT * FROM archive WHERE folder = $1 ORDER BY started_at DESC NULLS LAST, id DESC LIMIT $2', [folder, limit]);
+  }
+
+  async markFolderChecked(folder: string): Promise<void> {
+    await this.db.query('UPDATE archive SET checked_at = now() WHERE folder = $1', [folder]);
+  }
+
+  async markArchiveFreshness(id: number, freshness: string, note: string | null): Promise<void> {
+    await this.db.query('UPDATE archive SET freshness = $2, freshness_note = $3, needs_write = true WHERE id = $1', [id, freshness, note]);
+  }
+
+  /** Your newest profile, the most trusted statement of what's true. */
+  async latestProfile(): Promise<ArchiveRow | undefined> {
+    const rows = await this.db.query<ArchiveRow>("SELECT * FROM archive WHERE source = 'profile' ORDER BY started_at DESC NULLS LAST, id DESC LIMIT 1");
+    return rows[0];
+  }
+
+  archiveCounts(): Promise<{ source: string; total: number; sorted: number }[]> {
+    return this.db.query(`SELECT source, count(*)::int AS total, count(organized_at)::int AS sorted FROM archive GROUP BY source ORDER BY source`);
+  }
+
+  /** Every word must appear somewhere. Parameters are bound and wildcards escaped. */
+  searchArchive(query: string, limit = 200): Promise<ArchiveRow[]> {
+    const words = query.split(/\s+/).filter(Boolean).slice(0, 8).map((w) => `%${w.replace(/[\\%_]/g, '\\$&')}%`);
+    if (!words.length) return Promise.resolve([]);
+    return this.db.query(
+      `SELECT * FROM archive a WHERE NOT EXISTS (
+         SELECT 1 FROM unnest($2::text[]) AS w
+         WHERE NOT (a.title ILIKE w OR COALESCE(a.summary, '') ILIKE w OR COALESCE(a.folder, '') ILIKE w OR a.messages::text ILIKE w)
+       ) ORDER BY a.started_at DESC NULLS LAST LIMIT $1`,
+      [limit, words],
+    );
+  }
+
   // ---------- daemon jobs ----------
 
   async enqueueJob(kind: DaemonJobRow['kind'], args: Record<string, unknown> = {}): Promise<DaemonJobRow> {
@@ -719,18 +906,24 @@ export class Store {
     return row;
   }
 
-  /** Jobs for the daemon: pending ones, plus claims that were never finished. Old jobs are pruned (results can hold handles). */
+  /**
+   * Jobs for the daemon: pending ones, plus claims that were never finished. Old jobs are pruned (results can
+   * hold handles). A history read walks the whole Messages database, so it is not thrown away after 10 minutes
+   * or a day; a lost claim is picked up again after 10 minutes.
+   */
   async claimJobs(limit = 5): Promise<DaemonJobRow[]> {
-    await this.db.query("DELETE FROM daemon_jobs WHERE created_at < now() - interval '1 day'");
+    await this.db.query(`DELETE FROM daemon_jobs WHERE created_at < now() - interval '1 day' AND (kind <> 'read-history' OR status IN ('done', 'failed'))`);
     await this.db.query(
       `UPDATE daemon_jobs SET status = 'failed', error = 'the Mac did not pick this up in time', done_at = now()
-       WHERE status = 'pending' AND created_at < now() - interval '10 minutes'`,
+       WHERE status = 'pending' AND kind <> 'read-history' AND created_at < now() - interval '10 minutes'`,
     );
     return this.db.query(
       `UPDATE daemon_jobs SET status = 'claimed', claimed_at = now()
        WHERE id IN (
          SELECT id FROM daemon_jobs
-         WHERE status = 'pending' OR (status = 'claimed' AND claimed_at < now() - interval '2 minutes')
+         WHERE status = 'pending'
+            OR (status = 'claimed' AND kind <> 'read-history' AND claimed_at < now() - interval '2 minutes')
+            OR (status = 'claimed' AND kind = 'read-history' AND claimed_at < now() - interval '10 minutes')
          ORDER BY created_at, id LIMIT $1
          FOR UPDATE SKIP LOCKED
        ) RETURNING *`,
@@ -747,15 +940,75 @@ export class Store {
     return rows[0];
   }
 
+  /** A hub restart orphans a claim the Mac was in the middle of. Put it back so the import continues. */
+  async releaseHistoryClaims(): Promise<void> {
+    await this.db.query(`UPDATE daemon_jobs SET status = 'pending', claimed_at = NULL WHERE kind = 'read-history' AND status = 'claimed'`);
+  }
+
+  /** Is a history read still waiting on, or being done by, your Mac? */
+  async historyJobActive(): Promise<boolean> {
+    const rows = await this.db.query("SELECT 1 FROM daemon_jobs WHERE kind = 'read-history' AND status IN ('pending', 'claimed') LIMIT 1");
+    return rows.length > 0;
+  }
+
+  /** A session the worker couldn't reach is put back, instead of staying dead after a DNS blip. */
+  async requeueTransientFailures(): Promise<number> {
+    const rows = await this.db.query<{ id: number }>(
+      `UPDATE events SET dead_lettered_at = NULL, next_route_at = NULL, route_attempts = 0
+       WHERE dead_lettered_at IS NOT NULL
+         AND last_error ~* 'ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|getaddrinfo|Can''t reach the API'
+       RETURNING id`,
+    );
+    if (rows.length) {
+      await this.db.query(
+        `UPDATE dead_letters SET resolved_at = now(), resolution = 'retry' WHERE resolved_at IS NULL AND kind = 'route' AND ref_id = ANY($1::bigint[])`,
+        [rows.map((r) => r.id)],
+      );
+    }
+    return rows.length;
+  }
+
   async job(id: number): Promise<DaemonJobRow | undefined> {
     const rows = await this.db.query<DaemonJobRow>('SELECT * FROM daemon_jobs WHERE id = $1', [id]);
     return rows[0];
   }
 }
 
+export interface ArchiveMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  at: string | null;
+}
+
+export interface ArchiveRow {
+  id: number;
+  source: string;
+  external_id: string;
+  title: string;
+  messages: ArchiveMessage[];
+  hash: string;
+  started_at: Date | null;
+  updated_at: Date | null;
+  folder: string | null;
+  topics: string[];
+  summary: string | null;
+  vault_path: string | null;
+  needs_write: boolean;
+  sorted_at: Date | null;
+  sort_attempts: number;
+  /** Whether this still holds, as judged against newer chats: current, outdated or historical. */
+  freshness: 'current' | 'outdated' | 'historical' | null;
+  freshness_note: string | null;
+  checked_at: Date | null;
+  kind: string;
+  read_version: number;
+  organized_at: Date | null;
+}
+
 export interface DaemonJobRow {
   id: number;
-  kind: 'list-threads' | 'keep-awake' | 'open-settings';
+  kind: 'list-threads' | 'keep-awake' | 'open-settings' | 'read-history';
   args: Record<string, unknown>;
   status: 'pending' | 'claimed' | 'done' | 'failed';
   result: unknown;

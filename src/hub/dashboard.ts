@@ -1,4 +1,5 @@
 import { createHmac, randomBytes } from 'node:crypto';
+import path from 'node:path';
 import express, { type Request, type Response, type NextFunction, type Router } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { AGENT_IDS, TOPICS, agentIds, isAgentId, isBuiltinAgent, type AgentId, type Autonomy, type CustomAgentId } from '../shared/types.js';
@@ -16,6 +17,7 @@ import { EMAIL_PROVIDERS, editableKeys, mailUrl, type EmailProvider } from './ui
 import { settingsBody } from './ui/settings.js';
 import { macStatus } from './ui/status.js';
 import { todayBody, todayFragment } from './ui/today.js';
+import { accountSignedIn } from './worker.js';
 
 export { standingInstructions } from './ui/panels.js';
 
@@ -53,6 +55,9 @@ const ERR_MESSAGES: Record<string, string> = {
   wrong: 'Wrong password.',
   weak: 'Use at least 10 characters.',
   email: 'Enter your email address and an app password.',
+  appPassword: 'That’s not a Gmail app password. Those are 16 letters. Make one at myaccount.google.com/apppasswords. Your normal password won’t work.',
+  samePassword: 'Pick something different from your hub password. The point is to keep yours private.',
+  emailLogin: 'Your email provider rejected that login. Check the address and app password.',
 };
 
 const PHONE_OR_EMAIL = /^(\+?[\d][\d\s().-]{5,24}|[^@\s]{1,64}@[^@\s]{1,190})$/;
@@ -80,14 +85,58 @@ export function dashboardRouter(hub: Hub): Router {
   const { store, cfg } = hub;
   const conn = hub.connections;
   const r = express.Router();
-  // Defence in depth on top of SameSite=Strict: state-changing requests must come from the dashboard's own origin.
-  const origin = new URL(cfg.publicUrl).origin;
+  // Defence in depth on top of SameSite=Strict: POSTs must come from a page we served.
+  // Cursor's preview browser often sends Sec-Fetch-Site: cross-site even for localhost; Origin/Host is the real check.
+  const publicOrigin = new URL(cfg.publicUrl).origin;
+  const local = `http://127.0.0.1:${cfg.port}`;
   r.use((req, res, next) => {
     if (req.method === 'GET' || req.method === 'HEAD') return next();
-    const from = req.get('origin') ?? (req.get('referer') ? new URL(req.get('referer')!).origin : null);
-    if (req.get('sec-fetch-site') === 'cross-site' || (from !== null && from !== origin)) {
-      void store.audit('hub', 'dashboard.cross_origin_blocked', { path: req.path, origin: from });
-      res.status(403).send('Cross-origin request blocked');
+    // These two are guarded by a secret (setup code / password) and need no session, so the origin adds nothing.
+    if (req.path === '/welcome' || req.path === '/login') return next();
+    let from: string | null = req.get('origin') ?? null;
+    if (from === null && req.get('referer')) {
+      try {
+        from = new URL(req.get('referer')!).origin;
+      } catch {
+        from = 'null';
+      }
+    }
+    const host = (req.get('x-forwarded-host') ?? req.get('host') ?? '').split(',')[0].trim().toLowerCase();
+    let fromHost = '';
+    try {
+      fromHost = from ? new URL(from).host.toLowerCase() : '';
+    } catch {
+      fromHost = '';
+    }
+    const loopback = (h: string) => {
+      const m = h.match(/^(localhost|127\.0\.0\.1|\[::1\]):(\d+)$/i);
+      return m ? `loopback:${m[2]}` : h;
+    };
+    // Editor preview panes (Cursor, VS Code) send an opaque Origin ("null", vscode-webview://…). On a hub only
+    // reachable locally that's allowed: a real cross-site page never gets the SameSite=Strict session cookie anyway.
+    const opaque = from !== null && !/^https?:\/\//i.test(from);
+    const localOnly = !req.get('x-forwarded-host') && !req.get('x-forwarded-for') && loopback(host) !== host;
+    const allowed = from === publicOrigin || (opaque && localOnly) || Boolean(fromHost && host && (fromHost === host || loopback(fromHost) === loopback(host)));
+    if (!allowed && (from !== null || req.get('sec-fetch-site') === 'cross-site')) {
+      void store.audit('hub', 'dashboard.cross_origin_blocked', { path: req.path, origin: from, host, site: req.get('sec-fetch-site') ?? null });
+      // Never put the real setup token here: anyone who can reach the hub can trigger this page with a fake Origin.
+      // Echo back only a token the caller already had in its own Referer.
+      let echoed = '';
+      try {
+        echoed = new URL(req.get('referer') ?? '').searchParams.get('token') ?? '';
+      } catch {
+        echoed = '';
+      }
+      const href = conn.hasOwnerPassword() ? local : `${local}/welcome${echoed ? `?token=${encodeURIComponent(echoed)}` : ''}`;
+      res.status(403).type('html').send(
+        page(
+          'Open in Safari or Chrome',
+          `<div class="card stack"><h1>Open this in Safari or Chrome</h1>
+            <p>The preview browser inside Cursor looks like another website, so the hub blocked the save. Copy this into Safari or Chrome:</p>
+            <p><a class="btn big" href="${h(href)}">${h(href)}</a></p></div>`,
+          { bare: true },
+        ),
+      );
       return;
     }
     next();
@@ -120,12 +169,14 @@ export function dashboardRouter(hub: Hub): Router {
   };
   const issueSession = (res: Response) => {
     const exp = String(Date.now() + SESSION_TTL_MS);
-    const secure = cfg.publicUrl.startsWith('https://') ? '; Secure' : '';
+    // By how this request arrived, not the public address: a Secure cookie would break sign-in on http://localhost in Safari.
+    const secure = res.req.secure ? '; Secure' : '';
     res.setHeader('Set-Cookie', `${COOKIE}=${exp}.${sign(cfg.sessionSecret, exp)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}${secure}`);
   };
   const t = (d: Date | string | null) => (d ? formatLocal(new Date(d), cfg.timezone) : '—');
   const name = (a: string) => (isAgentId(a) ? ADAPTERS[a].name : a);
   const flashOf = (req: Request) => {
+    if (req.query.ok === 'told') return { flash: lastTell, flashKind: 'ok' as const };
     const ok = typeof req.query.ok === 'string' ? OK_MESSAGES[req.query.ok] : undefined;
     const err = typeof req.query.err === 'string' ? ERR_MESSAGES[req.query.err] : undefined;
     return err ? { flash: err, flashKind: 'err' as const } : ok ? { flash: ok, flashKind: 'ok' as const } : {};
@@ -167,7 +218,7 @@ export function dashboardRouter(hub: Hub): Router {
   // ---------- first run + sign in ----------
 
   const welcomePage = (token: string, error?: string) =>
-    page('Set up', `<div class="card stack" style="margin-top:6vh"><h1>Welcome to Agent Hub</h1>
+    page('Set up', `<div class="stack"><h1>Welcome to Agent Hub</h1>
       <p class="muted">First, create the password you’ll use to open this dashboard and approve agent connections.</p>
       ${error ? `<p class="flash err">${h(error)}</p>` : ''}
       <form method="post" action="/welcome">
@@ -204,7 +255,7 @@ export function dashboardRouter(hub: Hub): Router {
 
   r.get('/login', (_req, res) => {
     if (!conn.hasOwnerPassword()) return res.redirect(302, '/welcome');
-    send(res, 'Sign in', `<form method="post" action="/login" class="card stack" style="margin-top:10vh"><h1>Sign in</h1>
+    send(res, 'Sign in', `<form method="post" action="/login" class="stack"><h1>Sign in</h1>
       ${field('password', 'Password', { type: 'password', autocomplete: 'current-password', required: true })}
       <button class="btn big block">Sign in</button></form>`, { bare: true });
   });
@@ -263,10 +314,7 @@ export function dashboardRouter(hub: Hub): Router {
     } else if (step === 'phone') {
       if (unlocked('approval.handle') && str('approval.handle').trim()) result = await save({ 'approval.handle': str('approval.handle') });
     } else if (step === 'brain') {
-      const patch: Record<string, string | null> = {};
-      if (['anthropic', 'openai'].includes(str('router.provider'))) patch['router.provider'] = str('router.provider');
-      if (str('router.key').trim()) patch['router.key'] = str('router.key');
-      if (Object.keys(patch).length) result = await save(patch);
+      if (unlocked('worker.enabled')) result = await save({ 'worker.enabled': str('enabled') === '1' ? '1' : '0' });
     } else if (step === 'agents') {
       const picked = ([] as string[]).concat(b.agent ?? []).filter((a): a is (typeof AGENT_IDS)[number] => isBuiltinAgent(a));
       await conn.setOnboarding({ agents: AGENT_IDS.filter((a) => picked.includes(a)) });
@@ -307,9 +355,11 @@ export function dashboardRouter(hub: Hub): Router {
     const back = backTo(req, '/connections');
     const provider = String(req.body.provider ?? 'other') as EmailProvider;
     const address = String(req.body.address ?? '').trim();
-    const password = String(req.body.password ?? '');
+    // Google shows app passwords in groups with spaces, and those aren't part of it.
+    const password = String(req.body.password ?? '').replace(/\s+/g, '');
     const patch: Record<string, string | null> = {};
     if (!(provider in EMAIL_PROVIDERS)) return go(res, back, { err: 'invalid' });
+    if (provider === 'gmail' && password && !/^[a-zA-Z]{16}$/.test(password)) return go(res, back, { err: 'appPassword' });
     if (conn.source('email.from') !== 'env') {
       if (!address) return go(res, back, { err: 'email' });
       patch['email.from'] = address;
@@ -328,6 +378,8 @@ export function dashboardRouter(hub: Hub): Router {
       patch[`email.${k}`] = v;
     }
     if (!patch['email.smtp'] && !conn.isSet('email.smtp')) return go(res, back, { err: 'email' });
+    // Try the login now, so a rejected password doesn't look saved and working. A network hiccup doesn't block saving.
+    if (patch['email.smtp'] && (await hub.checkEmailLogin(patch['email.smtp'])) === 'rejected') return go(res, back, { err: 'emailLogin' });
     const result = await save(patch);
     go(res, back, result === 'ok' ? { ok: 'saved' } : { err: result });
   });
@@ -383,7 +435,42 @@ export function dashboardRouter(hub: Hub): Router {
     const agent = req.params.agent as AgentId;
     if (!agent.startsWith('custom-')) return res.status(404).end();
     await conn.removeCustomAgent(agent as CustomAgentId);
+    await conn.removeAgentPassword(agent);
     go(res, '/connections', { ok: 'deleted' });
+  });
+  r.post('/connections/instinct/brain/generate', requireOwner, async (req, res) => {
+    const result = await save({ 'instinct.brainToken': randomBytes(32).toString('base64url') });
+    await store.audit('owner', 'brain.link_created', {});
+    go(res, backTo(req, '/connections/instinct'), result === 'ok' ? { ok: 'saved' } : { err: result });
+  });
+  r.post('/connections/instinct/brain/off', requireOwner, async (req, res) => {
+    const result = await save({ 'instinct.brainToken': null });
+    await store.audit('owner', 'brain.link_removed', {});
+    go(res, backTo(req, '/connections/instinct'), result === 'ok' ? { ok: 'saved' } : { err: result });
+  });
+  r.post('/connections/:agent/password', requireOwner, async (req, res) => {
+    const agent = req.params.agent as AgentId;
+    if (!isAgentId(agent) || ADAPTERS[agent].capabilities.readVia !== 'mcp') return res.status(404).end();
+    const back = backTo(req, `/connections/${agent}`);
+    const chosen = String(req.body.password ?? '');
+    if (chosen && chosen.length < 10) return go(res, back, { err: 'weak' });
+    if (chosen && (await conn.verifyOwnerPassword(chosen))) return go(res, back, { err: 'samePassword' });
+    const password = chosen || randomBytes(18).toString('base64url');
+    await conn.setAgentPassword(agent, password);
+    await store.audit('owner', 'agent.password_set', { agent, chosen: Boolean(chosen) });
+    if (chosen) return go(res, back, { ok: 'saved' });
+    // A generated one is only ever shown here, on this response.
+    const revealed = { 'agent.password': password };
+    const view = back.startsWith('/onboarding/') ? renderStep(hub, back.slice('/onboarding/'.length) as Step, revealed) : null;
+    if (view) return send(res, view.title, view.html, { bare: true });
+    send(res, ADAPTERS[agent].name, await connectionDetail(hub, agent, { back: `/connections/${agent}`, revealed }), { nav: 'connections' });
+  });
+  r.post('/connections/:agent/password/remove', requireOwner, async (req, res) => {
+    const agent = req.params.agent as AgentId;
+    if (!isAgentId(agent)) return res.status(404).end();
+    await conn.removeAgentPassword(agent);
+    await store.audit('owner', 'agent.password_removed', { agent });
+    go(res, backTo(req, `/connections/${agent}`), { ok: 'saved' });
   });
   r.post('/connections/:agent/generate', requireOwner, async (req, res) => {
     const agent = req.params.agent as AgentId;
@@ -409,8 +496,12 @@ export function dashboardRouter(hub: Hub): Router {
 
   // ---------- settings ----------
 
-  r.get('/settings', requireOwner, (req, res) => {
-    send(res, 'Settings', settingsBody(hub), { nav: 'settings', ...flashOf(req) });
+  r.get('/settings', requireOwner, async (req, res) => {
+    const signedIn = Object.fromEntries(await Promise.all(cfg.worker.accounts.map(async (a) => [a.id, await accountSignedIn(cfg.worker, a)] as const)));
+    await hub.importer.resumeHistory();
+    const history = await store.getSetting<{ state: string; error?: string } | null>('import.history', null);
+    const imports = { status: await hub.importer.status(), history };
+    send(res, 'Settings', settingsBody(hub, signedIn, imports), { nav: 'settings', ...flashOf(req) });
   });
   r.post('/settings/profile', requireOwner, async (req, res) => {
     const patch: Record<string, string | null> = {};
@@ -422,11 +513,56 @@ export function dashboardRouter(hub: Hub): Router {
     const result = conn.source('approval.handle') === 'env' ? 'env' : await save({ 'approval.handle': String(req.body['approval.handle'] ?? '').trim() || null });
     go(res, '/settings', result === 'ok' ? { ok: 'saved' } : { err: result });
   });
-  r.post('/settings/router', requireOwner, async (req, res) => {
-    const patch: Record<string, string | null> = {};
-    if (['anthropic', 'openai'].includes(req.body['router.provider'])) patch['router.provider'] = req.body['router.provider'];
-    if (String(req.body['router.key'] ?? '').trim()) patch['router.key'] = String(req.body['router.key']);
+  r.post('/settings/worker', requireOwner, async (req, res) => {
+    const account = String(req.body.account ?? '');
+    const sources = ([] as string[]).concat(req.body.source ?? []).filter((a) => isAgentId(a));
+    const patch: Record<string, string | null> = { 'worker.enabled': req.body.enabled === '1' ? '1' : '0', 'worker.sources': sources.join(',') };
+    if (cfg.worker.accounts.some((a) => a.id === account)) patch['worker.account'] = account;
     const result = await save(patch);
+    await store.audit('owner', 'worker.settings', { enabled: patch['worker.enabled'], account: patch['worker.account'] ?? cfg.worker.activeAccount, sources });
+    go(res, '/settings', result === 'ok' ? { ok: 'saved' } : { err: result });
+  });
+  r.post('/settings/worker/account', requireOwner, async (req, res) => {
+    const label = String(req.body.label ?? '').trim().slice(0, 60);
+    const id = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+    if (!id || cfg.worker.accounts.some((a) => a.id === id)) return go(res, '/settings', { err: 'invalid' });
+    const dir = path.resolve(path.dirname(cfg.pgliteDir), 'claude-accounts', id);
+    const accounts = [...cfg.worker.accounts.filter((a) => a.configDir), { id, label, configDir: dir }];
+    const result = await save({ 'worker.accounts': JSON.stringify(accounts) });
+    go(res, '/settings', result === 'ok' ? { ok: 'saved' } : { err: result });
+  });
+  r.post('/settings/worker/account/:account/remove', requireOwner, async (req, res) => {
+    const id = String(req.params.account);
+    const patch: Record<string, string | null> = { 'worker.accounts': JSON.stringify(cfg.worker.accounts.filter((a) => a.configDir && a.id !== id)) };
+    if (cfg.worker.activeAccount === id) patch['worker.account'] = 'default';
+    const result = await save(patch);
+    await store.audit('owner', 'worker.account_removed', { id });
+    go(res, '/settings', result === 'ok' ? { ok: 'saved' } : { err: result });
+  });
+  r.post('/settings/import/code', requireOwner, async (_req, res) => {
+    await store.audit('owner', 'import.code_started', {});
+    void hub.importer.scanCodeSessions(new Date(), true).then(() => hub.kick()).catch((err) => store.audit('hub', 'import.step_failed', { error: String(err).slice(0, 200) }));
+    res.redirect(303, '/settings#import');
+  });
+  r.post('/settings/import/reorganize', requireOwner, async (_req, res) => {
+    await store.resetArchiveOrganization();
+    await store.audit('owner', 'import.reorganize', {});
+    hub.kick();
+    res.redirect(303, '/settings#import');
+  });
+  r.post('/settings/import/history', requireOwner, async (_req, res) => {
+    const handles = (['instinct', 'stanley', 'boardy'] as const).map((a) => cfg.imessageHandles[a]).filter((x): x is string => Boolean(x));
+    if (!handles.length) return go(res, '/settings', { err: 'invalid' });
+    await store.setSetting('import.history', { state: 'reading', afterRowId: 0, handles });
+    await store.enqueueJob('read-history', { handles, afterRowId: 0 });
+    await store.audit('owner', 'import.history_started', {});
+    res.redirect(303, '/settings#import');
+  });
+  r.post('/settings/vault', requireOwner, async (req, res) => {
+    const dir = String(req.body['vault.path'] ?? '').trim();
+    if (!path.isAbsolute(dir)) return go(res, '/settings', { err: 'invalid' });
+    const result = await save({ 'vault.path': dir });
+    hub.kick();
     go(res, '/settings', result === 'ok' ? { ok: 'saved' } : { err: result });
   });
   r.post('/settings/password', requireOwner, loginLimit, async (req, res) => {
@@ -530,12 +666,12 @@ export function dashboardRouter(hub: Hub): Router {
     }
   });
   api.post('/router/test', async (_req, res) => {
-    if (!hub.llm) return res.status(400).json({ error: 'Add a key first.' });
+    if (!hub.worker) return res.status(400).json({ error: 'Turn on the background worker first.' });
     try {
-      await hub.llm.complete('You are a connectivity check. Reply with the single word OK.', 'ping');
-      res.json({ ok: true, model: `${cfg.router.provider}:${cfg.router.model}` });
+      await hub.worker.complete('You are a connectivity check. Reply with the single word OK.', 'ping');
+      res.json({ ok: true, model: `${cfg.worker.activeAccount}, ${cfg.worker.model}` });
     } catch (err) {
-      res.status(502).json({ error: `The key didn’t work: ${String((err as Error).message ?? err).slice(0, 200)}` });
+      res.status(502).json({ error: `The worker didn’t answer: ${String((err as Error).message ?? err).slice(0, 200)}` });
     }
   });
   api.post('/agents/:agent/test', (_req, res) => {
@@ -608,8 +744,8 @@ export function dashboardRouter(hub: Hub): Router {
     const items = [
       ...events.map((e) => ({
         at: new Date(e.occurred_at),
-        html: `<b>${h(name(e.agent))}</b> ${pill(e.kind)} ${e.hop ? pill(`hop ${e.hop}`) : ''}
-          ${h(e.summary || '(not routed yet)')}<div class="muted small">${e.topics.map(h).join(', ')} · ${e.author === 'user' ? 'with you' : 'agent-reported'}</div>
+        html: `<b>${h(name(e.agent))}</b> ${pill(e.kind)} ${e.triage && e.triage !== 'log' ? pill(e.triage, 'accent') : ''} ${e.hop ? pill(`hop ${e.hop}`) : ''}
+          ${h(e.summary || '(waiting for the worker)')}<div class="muted small">${e.topics.map(h).join(', ')} · ${e.author === 'user' ? 'with you' : 'agent-reported'}</div>
           ${e.raw_excerpt ? `<details class="more"><summary>excerpt</summary><pre>${h(e.raw_excerpt)}</pre></details>` : ''}`,
       })),
       ...audit.map((a) => ({ at: new Date(a.at), html: `<span class="muted">${h(a.actor)} · ${h(a.action)}</span> <code class="small">${h(JSON.stringify(a.detail))}</code>` })),
@@ -726,6 +862,17 @@ export function dashboardRouter(hub: Hub): Router {
     await store.supersedeSituation([Number(req.params.id)], null);
     await store.audit('owner', 'situation.cleared', { id: Number(req.params.id) });
     res.redirect(303, '/');
+  });
+
+  // "Tell them once": the same plain commands you can text the hub.
+  let lastTell = 'Saved.';
+  r.post('/actions/tell', requireOwner, async (req, res) => {
+    const kind = String(req.body.kind ?? '');
+    const text = String(req.body.text ?? '').trim().slice(0, 500);
+    if (!text || !(['now', 'today', 'tomorrow', 'goal'].includes(kind) || isAgentId(kind))) return go(res, '/', { err: 'invalid' });
+    lastTell = (await hub.approvals.runCommand(`${kind}: ${text}`, 'dashboard')) ?? 'Saved.';
+    hub.kick();
+    res.redirect(303, '/?ok=told');
   });
 
   r.post('/actions/debrief-digest', requireOwner, async (_req, res) => {

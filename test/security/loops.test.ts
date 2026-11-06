@@ -27,7 +27,7 @@ describe('agent loops', () => {
 
     // Stan replies over Telegram; the router (pushed by the reply) hands a follow-up to Grok at hop 2.
     h.telegram.reply('Script attached. Ask Grok to post it to the README.');
-    h.llm.next.push(() => ({ summary: 's', tasks: [{ target_agent: 'grok', payload: 'Post the script to the README', topics: ['work'], evidence: [] }] }));
+    h.worker.next.push(() => ({ summary: 's', tasks: [{ target_agent: 'grok', payload: 'Post the script to the README', topics: ['work'], evidence: [] }] }));
     await h.hub.pollReads();
     await h.hub.collectBursts(minutesFromNow(11));
     await h.hub.routePending();
@@ -48,8 +48,8 @@ describe('agent loops', () => {
       expect(out.text, JSON.stringify(extra)).toMatch(/Blocked: hop limit \(3 > 2\)/);
     }
     // A session logged without a code inherits the chain too, so the router can't start hop 1 from it.
-    h.llm.next.push(() => ({ summary: 's', tasks: [{ target_agent: 'stanley', payload: 'Yet another script', topics: ['content'], evidence: [] }] }));
-    await grok('log_session', { summary: 'Posted it. Stanley should make another.' });
+    h.worker.next.push(() => ({ summary: 's', tasks: [{ target_agent: 'stanley', payload: 'Yet another script', topics: ['content'], evidence: [] }] }));
+    await grok('log_session', { summary: 'Posted it. Stanley should make another.', decisions: ['Stanley makes another'] });
     await h.hub.idle();
     await h.hub.routePending();
     const [ev] = await h.store.recentEvents(1);
@@ -76,7 +76,7 @@ describe('agent loops', () => {
   it('LP-03 agent-only replies inherit the hop of the task that prompted them; the router cannot exceed the limit', async () => {
     const h = await secureHub();
     const ev = await h.store.insertEvent({ agent: 'stanley', occurredAt: new Date(), author: 'agent', rawExcerpt: 'x', summary: '', topics: [], kind: 'chat', hop: 2 });
-    h.llm.next.push(() => ({ summary: 's', tasks: [{ target_agent: 'grok', payload: 'more', topics: ['work'], evidence: [] }] }));
+    h.worker.next.push(() => ({ summary: 's', tasks: [{ target_agent: 'grok', payload: 'more', topics: ['work'], evidence: [] }] }));
     await h.hub.routePending();
     const [t] = await h.store.recentTasks(1);
     expect([t.origin_event_id, t.hop, t.status]).toEqual([ev.id, 3, 'blocked']);
