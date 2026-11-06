@@ -24,3 +24,16 @@ export function createEmail(cfg: HubConfig['email']): EmailTransport | null {
     },
   };
 }
+
+export async function checkEmailLogin(smtpUrl: string): Promise<'ok' | 'rejected' | 'unknown'> {
+  const nodemailer = await import('nodemailer');
+  const transporter = nodemailer.createTransport(smtpUrl);
+  try {
+    await transporter.verify();
+    return 'ok';
+  } catch (err) {
+    return (err as { code?: string }).code === 'EAUTH' ? 'rejected' : 'unknown';
+  } finally {
+    transporter.close();
+  }
+}

@@ -298,6 +298,20 @@ describe('onboarding wizard', () => {
     expect(h.cfg.worker.activeAccount).toBe('default');
   });
 
+  it('won’t save a Gmail password that can’t work, and checks the login first', async () => {
+    const h = await hubFor({ SMTP_URL: '', EMAIL_FROM: '' });
+    const b = browser(h.url);
+    await b.login();
+    const save = (password: string) => b.submit('/connections/email/save', { provider: 'gmail', address: 'ved@gmail.com', password });
+    expect(await save('MyNormalPw1!')).toBe('/connections?err=appPassword');
+    h.hub.checkEmailLogin = async () => 'rejected';
+    expect(await save('abcd efgh ijkl mnop')).toBe('/connections?err=emailLogin');
+    expect(h.hub.connections.isSet('email.smtp')).toBe(false);
+    h.hub.checkEmailLogin = async () => 'unknown';
+    expect(await save('abcd efgh ijkl mnop')).toBe('/connections?ok=saved');
+    expect(h.cfg.email.smtpUrl).toContain(':abcdefghijklmnop@');
+  });
+
   it('skips the worker step when it is set from the environment', async () => {
     const h = await hubFor({ WORKER_ENABLED: '1' });
     const b = browser(h.url);

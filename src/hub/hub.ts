@@ -7,6 +7,7 @@ import type { HubConfig } from './config.js';
 import { brainUrl } from './brain.js';
 import { debriefActive, noteDebriefStart, processPendingDebrief, queueDigestNow, scheduleDigest } from './debrief.js';
 import { readInstinctMail } from './instinctMail.js';
+import { checkEmailLogin } from './transports/email.js';
 import { dispatchApproved } from './dispatch.js';
 import { backoffMs } from './backoff.js';
 import { Importer } from './importer.js';
@@ -62,6 +63,8 @@ export class Hub {
   readonly connections: Connections;
   /** Drives the Stanley login on the Connections page; replaced with a fake in tests. */
   telegramLogin: TelegramLoginDriver = telegramLoginDriver();
+  /** Tries an email login without sending anything; replaced in tests. */
+  checkEmailLogin: (smtpUrl: string) => Promise<'ok' | 'rejected' | 'unknown'> = checkEmailLogin;
   /** Installs the daemon when the hub itself runs on the Mac; replaced in tests. */
   macInstaller: MacInstaller | null = null;
 

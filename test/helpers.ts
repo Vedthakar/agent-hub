@@ -151,6 +151,7 @@ export async function makeHub(
   const transports: Transports = { ...createTransports(cfg, store), email, telegramUser: telegram, sms, telegramBot: null, imap: null, ...overrides };
   const secrets = opts.secrets ? opts.secrets(raw) : localSecretStore(raw, randomBytes(32));
   const hub = new Hub(store, cfg, transports, worker, { secrets, env: fullEnv });
+  hub.checkEmailLogin = async () => 'ok';
   await hub.connections.load();
   return { hub, store, cfg, db, worker: worker as FakeWorker, email, telegram, sms, transports, backend: which, databaseUrl: fresh?.url ?? null };
 }

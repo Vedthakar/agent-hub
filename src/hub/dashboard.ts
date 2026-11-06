@@ -55,6 +55,8 @@ const ERR_MESSAGES: Record<string, string> = {
   wrong: 'Wrong password.',
   weak: 'Use at least 10 characters.',
   email: 'Enter your email address and an app password.',
+  appPassword: 'That’s not a Gmail app password. Those are 16 letters. Make one at myaccount.google.com/apppasswords. Your normal password won’t work.',
+  emailLogin: 'Your email provider rejected that login. Check the address and app password.',
 };
 
 const PHONE_OR_EMAIL = /^(\+?[\d][\d\s().-]{5,24}|[^@\s]{1,64}@[^@\s]{1,190})$/;
@@ -352,9 +354,11 @@ export function dashboardRouter(hub: Hub): Router {
     const back = backTo(req, '/connections');
     const provider = String(req.body.provider ?? 'other') as EmailProvider;
     const address = String(req.body.address ?? '').trim();
-    const password = String(req.body.password ?? '');
+    // Google shows app passwords in groups with spaces, and those aren't part of it.
+    const password = String(req.body.password ?? '').replace(/\s+/g, '');
     const patch: Record<string, string | null> = {};
     if (!(provider in EMAIL_PROVIDERS)) return go(res, back, { err: 'invalid' });
+    if (provider === 'gmail' && password && !/^[a-zA-Z]{16}$/.test(password)) return go(res, back, { err: 'appPassword' });
     if (conn.source('email.from') !== 'env') {
       if (!address) return go(res, back, { err: 'email' });
       patch['email.from'] = address;
@@ -373,6 +377,8 @@ export function dashboardRouter(hub: Hub): Router {
       patch[`email.${k}`] = v;
     }
     if (!patch['email.smtp'] && !conn.isSet('email.smtp')) return go(res, back, { err: 'email' });
+    // Try the login now, so a rejected password doesn't look saved and working. A network hiccup doesn't block saving.
+    if (patch['email.smtp'] && (await hub.checkEmailLogin(patch['email.smtp'])) === 'rejected') return go(res, back, { err: 'emailLogin' });
     const result = await save(patch);
     go(res, back, result === 'ok' ? { ok: 'saved' } : { err: result });
   });
