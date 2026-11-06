@@ -323,6 +323,24 @@ describe('onboarding wizard', () => {
     expect((await b.get('/onboarding/mac')).status).not.toBe(200);
   });
 
+  it('makes a connection password once, lets you choose one, and rejects a weak one or your own', async () => {
+    const h = await hubFor({});
+    const b = browser(h.url);
+    await b.login();
+    const made = await b.form('/connections/claude/password', { password: '' });
+    const page = await made.text();
+    expect(page).toContain('Copy this now');
+    expect(page).toMatch(/id="pw-claude" readonly value="[\w-]{20,}"/);
+    expect(await b.html('/connections/claude')).not.toContain('id="pw-claude"');
+    expect(h.hub.connections.hasAgentPassword('claude')).toBe(true);
+    expect(await b.submit('/connections/chatgpt/password', { password: 'short' })).toBe('/connections/chatgpt?err=weak');
+    expect(await b.submit('/connections/chatgpt/password', { password: 'hunter2hunter2' })).toBe('/connections/chatgpt?ok=saved');
+    expect(await h.hub.connections.verifyConnectPassword('chatgpt', 'hunter2hunter2')).toBe(true);
+    expect((await b.form('/connections/instinct/password', { password: 'x'.repeat(12) })).status).toBe(404);
+    expect(await b.submit('/connections/chatgpt/password/remove', {})).toBe('/connections/chatgpt?ok=saved');
+    expect(h.hub.connections.hasAgentPassword('chatgpt')).toBe(false);
+  });
+
   it('skips the worker step when it is set from the environment', async () => {
     const h = await hubFor({ WORKER_ENABLED: '1' });
     const b = browser(h.url);

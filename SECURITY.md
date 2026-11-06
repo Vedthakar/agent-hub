@@ -11,6 +11,7 @@ Please don't open a public issue. Use [GitHub's private reporting](https://githu
 Read the [threat model](THREAT_MODEL.md) for the full picture. The main points:
 
 - **You run it, so you secure it.** Use a strong dashboard password, and keep your machine updated.
+- **Give each agent its own connection password,** so your hub password stays with you.
 - **Don't expose it without HTTPS.** Connecting Claude, ChatGPT or Gemini means putting it on the internet.
 - **Instinct's private vault link is effectively a password.** Anyone holding it can read what Instinct may see. Replace it if it leaks.
 - **Connected agents belong to other companies.** What you let them read goes to them under their terms.

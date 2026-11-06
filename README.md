@@ -140,6 +140,8 @@ The daemon ships new lines from watched iMessage threads. MCP agents push sessio
 
 **Switching accounts.** Add accounts in **Settings → Background worker**. Each signs in separately (it gets its own `CLAUDE_CONFIG_DIR`), and you pick which one runs. Switching is your choice: the hub doesn't rotate accounts by itself to get around a plan's limits.
 
+**Connection passwords.** Give each agent its own password in **Connections**, so you never type your hub password into an agent's sign-in page. It connects only that agent, and it can't open your dashboard.
+
 **Saving as you chat.** Claude, ChatGPT, Gemini, and Grok Bot save with one short tool call: `set_situation`, `save_memory`, `retire_memory`, `propose_task`, or `log_session`. An agent can't replace or retire what you said yourself.
 
 **Texting the hub.** Fixed formats, no AI, from your own devices only, in the approval thread or the box on **Today**:

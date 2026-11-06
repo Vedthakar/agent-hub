@@ -150,6 +150,7 @@ export class Connections {
   private base: HubConfig;
   private daemonTokenHashes: string[] = [];
   private ownerHash: PasswordHash | null = null;
+  private agentPasswords: Partial<Record<AgentId, PasswordHash>> = {};
   custom: CustomAgentDef[] = [];
   onboarding: OnboardingState = { completed: false, agents: [] };
   /** Unlocks first-run password creation. Kept until a password exists so a restart doesn't kill the setup link. */
@@ -173,6 +174,7 @@ export class Connections {
     this.custom = (await s.getSetting<CustomAgentDef[]>('agents.custom', [])).filter((d) => CUSTOM_AGENT_ID.test(d.id));
     this.onboarding = { completed: false, agents: [], ...(await s.getSetting<Partial<OnboardingState>>('onboarding', {})) };
     this.ownerHash = await s.getSetting<PasswordHash | null>('owner.password', null);
+    this.agentPasswords = await s.getSetting<Partial<Record<AgentId, PasswordHash>>>('agent.passwords', {});
     this.daemonTokenHashes = await s.getSetting<string[]>('daemon.tokens', []);
     if (!this.hasOwnerPassword()) {
       const stored = await s.getSetting<string | null>('owner.setupToken', null);
@@ -348,11 +350,42 @@ export class Connections {
     return 'ok';
   }
 
-  private async storePassword(password: string) {
+  private async hashPassword(password: string): Promise<PasswordHash> {
     const salt = randomBytes(16);
     const hash = await scrypt(password, salt, 32, SCRYPT);
-    this.ownerHash = { alg: 'scrypt', N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p, salt: salt.toString('base64'), hash: hash.toString('base64') };
+    return { alg: 'scrypt', N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p, salt: salt.toString('base64'), hash: hash.toString('base64') };
+  }
+
+  private async storePassword(password: string) {
+    this.ownerHash = await this.hashPassword(password);
     await this.store.setSetting('owner.password', this.ownerHash);
+  }
+
+  // ---------- per-agent connection passwords ----------
+
+  hasAgentPassword(agent: AgentId): boolean {
+    return Boolean(this.agentPasswords[agent]);
+  }
+
+  /** Only ever stored hashed. It can connect this one agent, and nothing else: not another agent, not the dashboard. */
+  async setAgentPassword(agent: AgentId, password: string): Promise<void> {
+    this.agentPasswords[agent] = await this.hashPassword(password);
+    await this.store.setSetting('agent.passwords', this.agentPasswords);
+  }
+
+  async removeAgentPassword(agent: AgentId): Promise<void> {
+    delete this.agentPasswords[agent];
+    await this.store.setSetting('agent.passwords', this.agentPasswords);
+  }
+
+  /** An agent with its own password connects only with that. One without any still uses the owner's. */
+  async verifyConnectPassword(agent: AgentId, password: string): Promise<boolean> {
+    const h = this.agentPasswords[agent];
+    if (!h) return this.verifyOwnerPassword(password);
+    if (!password) return false;
+    const got = await scrypt(password, Buffer.from(h.salt, 'base64'), 32, { N: h.N, r: h.r, p: h.p, maxmem: SCRYPT.maxmem });
+    const want = Buffer.from(h.hash, 'base64');
+    return got.length === want.length && timingSafeEqual(got, want);
   }
 
   // ---------- Mac daemon pairing ----------

@@ -146,7 +146,7 @@ function mcpSteps(agent: 'claude' | 'chatgpt' | 'gemini', url: string): { title:
     return [
       { title: 'In Claude, open <b>Settings → Connectors</b>', body: 'On claude.ai or the desktop app.', art: figure({ ...base, app: 'Claude', nav: ['General', 'Profile', 'Connectors', 'Billing'], activeNav: 2, title: 'Connectors', body: { kind: 'button', text: 'Add custom connector', label: 'Connect Claude to your tools' } }) },
       { title: 'Click <b>Add custom connector</b>, name it “Agent Hub” and paste the URL above', art: figure({ ...base, app: 'Claude', nav: ['General', 'Profile', 'Connectors', 'Billing'], activeNav: 2, title: 'Add custom connector', body: { kind: 'form', fields: [{ label: 'Name', value: 'Agent Hub' }, { label: 'Remote MCP server URL', value: url }], target: 1, button: 'Add' } }) },
-      { title: 'Click <b>Connect</b>. On the Agent Hub page, choose <b>Claude</b>, enter your hub password and click Allow', art: figure(consent('Claude')) },
+      { title: 'Click <b>Connect</b>. On the Agent Hub page, choose <b>Claude</b>, enter its connection password (or your hub password if you haven’t made one) and click Allow', art: figure(consent('Claude')) },
       { title: 'Paste the instructions below into <b>Settings → Profile</b> (“personal preferences”)', body: 'This tells Claude to check the hub at the start of every chat.', art: figure({ ...base, app: 'Claude', nav: ['General', 'Profile', 'Connectors', 'Billing'], activeNav: 1, title: 'Profile', body: { kind: 'text', label: 'What personal preferences should Claude consider?', lines: 5, button: 'Save' } }) },
     ];
   }
@@ -154,14 +154,14 @@ function mcpSteps(agent: 'claude' | 'chatgpt' | 'gemini', url: string): { title:
     return [
       { title: 'In ChatGPT (on the web), open <b>Settings → Apps &amp; Connectors → Advanced</b> and turn on <b>Developer mode</b>', art: figure({ ...base, app: 'ChatGPT', nav: ['General', 'Personalization', 'Apps & Connectors', 'Security'], activeNav: 2, title: 'Advanced settings', body: { kind: 'toggle', label: 'Developer mode', note: 'Add custom MCP connectors' } }) },
       { title: 'Back in Apps &amp; Connectors click <b>Create</b>, name it “Agent Hub”, paste the URL above and pick <b>OAuth</b>', art: figure({ ...base, app: 'ChatGPT', nav: ['General', 'Personalization', 'Apps & Connectors', 'Security'], activeNav: 2, title: 'New connector', body: { kind: 'form', fields: [{ label: 'Name', value: 'Agent Hub' }, { label: 'MCP Server URL', value: url }, { label: 'Authentication', value: 'OAuth' }], target: 1, button: 'Create' } }) },
-      { title: 'On the Agent Hub page, choose <b>ChatGPT</b>, enter your hub password and click Allow', art: figure(consent('ChatGPT')) },
+      { title: 'On the Agent Hub page, choose <b>ChatGPT</b>, enter its connection password (or your hub password if you haven’t made one) and click Allow', art: figure(consent('ChatGPT')) },
       { title: 'Paste the instructions below into <b>Settings → Personalization → Custom instructions</b>', art: figure({ ...base, app: 'ChatGPT', nav: ['General', 'Personalization', 'Apps & Connectors', 'Security'], activeNav: 1, title: 'Custom instructions', body: { kind: 'text', label: 'What would you like ChatGPT to know?', lines: 5, button: 'Save' } }) },
     ];
   }
   return [
     { title: 'In Gemini, open <b>Settings → Connected apps</b> and choose <b>Add custom MCP server</b>', body: 'Custom servers need a Gemini plan that supports them.', art: figure({ ...base, app: 'Gemini', nav: ['Activity', 'Saved info', 'Connected apps', 'Help'], activeNav: 2, title: 'Connected apps', body: { kind: 'button', text: 'Add custom MCP server', label: 'Connect Gemini to more tools' } }) },
     { title: 'Paste the URL above and save', art: figure({ ...base, app: 'Gemini', nav: ['Activity', 'Saved info', 'Connected apps', 'Help'], activeNav: 2, title: 'Add MCP server', body: { kind: 'form', fields: [{ label: 'Name', value: 'Agent Hub' }, { label: 'Server URL', value: url }], target: 1, button: 'Save' } }) },
-    { title: 'On the Agent Hub page, choose <b>Gemini</b>, enter your hub password and click Allow', art: figure(consent('Gemini')) },
+    { title: 'On the Agent Hub page, choose <b>Gemini</b>, enter its connection password (or your hub password if you haven’t made one) and click Allow', art: figure(consent('Gemini')) },
     { title: 'Paste the instructions below into <b>Settings → Saved info</b>', art: figure({ ...base, app: 'Gemini', nav: ['Activity', 'Saved info', 'Connected apps', 'Help'], activeNav: 1, title: 'Saved info', body: { kind: 'text', label: 'Info you asked Gemini to save', lines: 5, button: 'Save' } }) },
   ];
 }
@@ -171,11 +171,27 @@ function httpsWarning(hub: Hub): string {
   return `<div class="banner warn"><div><b>Your hub's address isn't public yet.</b> Claude, ChatGPT and Gemini connect from the internet, so they need an <code>https://</code> address. This hub is at <code>${h(hub.cfg.publicUrl)}</code>. Deploy it or run a tunnel (see the README), then set <code>HUB_PUBLIC_URL</code>.</div></div>`;
 }
 
-export function mcpPanel(hub: Hub, agent: 'claude' | 'chatgpt' | 'gemini'): string {
+/** Lets you connect an agent without typing your own password into a sign-in page. */
+function connectPasswordBlock(hub: Hub, agent: AgentId, ctx: PanelCtx): string {
+  const name = ADAPTERS[agent].name;
+  const has = hub.connections.hasAgentPassword(agent);
+  const shown = ctx.revealed?.['agent.password'];
+  return `<div class="stack"><h3>Connection password</h3>
+    <p class="muted">Use this instead of your own password when ${h(name)} asks you to sign in. It can only connect ${h(name)}. It can't open your dashboard or connect anything else.${has ? ` Your own password no longer works for ${h(name)}.` : ''}</p>
+    ${shown ? `<div class="banner"><div><b>Copy this now.</b> It won't be shown again.</div></div>${copyField(shown, { label: 'Connection password', id: `pw-${agent}` })}` : ''}
+    <form method="post" action="/connections/${h(agent)}/password">${hidden('back', ctx.back)}
+      ${field('password', 'Choose your own (optional)', { type: 'password', autocomplete: 'new-password', help: 'At least 10 characters, different from your hub password. Leave blank and the hub makes a strong one.' })}
+      <div class="row"><button class="btn${has ? ' secondary' : ''}">${has ? 'Change password' : 'Create password'}</button></div></form>
+    ${has ? `<form method="post" action="/connections/${h(agent)}/password/remove" class="inline">${hidden('back', ctx.back)}<button class="btn ghost">Remove it</button></form>` : ''}
+    <p class="muted small">Changing it doesn't disconnect ${h(name)}. To cut off a connection, use Disconnect.</p></div>`;
+}
+
+export function mcpPanel(hub: Hub, agent: 'claude' | 'chatgpt' | 'gemini', ctx: PanelCtx): string {
   const url = `${hub.cfg.publicUrl}/mcp`;
   const name = ADAPTERS[agent].name;
   return `<div class="stack">${httpsWarning(hub)}
   ${copyField(url, { label: 'Your hub’s MCP URL', id: `mcp-${agent}` })}
+  ${connectPasswordBlock(hub, agent, ctx)}
   ${steps(mcpSteps(agent, url))}
   ${copyField(standingInstructions(), { label: 'Instructions to paste', multiline: true, id: `instr-${agent}` })}
   <div data-widget="test-connection" data-agent="${agent}" data-name="${h(name)}" class="stack">
@@ -298,6 +314,7 @@ export function webhookPanel(hub: Hub, agent: AgentId, ctx: PanelCtx): string {
       <p class="muted small">Send JSON with a <code>type</code> of <code>situation</code>, <code>session</code> (with <code>summary</code>), <code>inbox</code>, <code>propose</code> or <code>task_result</code>. Sign <code>&lt;timestamp&gt;.&lt;body&gt;</code> with the secret. Requests older than 5 minutes, or seen before, are rejected.</p>
       <pre>${h(example)}</pre></details>
   </div>
+  <div class="card flat">${connectPasswordBlock(hub, agent, ctx)}</div>
   <div class="card flat">${form(agent, ctx.back, `<h3>2. Nudge URL (optional)</h3><p class="muted">If ${h(name)} has a URL the hub can ping when a task is approved, paste it here. The ping is signed with the same secret and carries only the task code.</p>
     ${field(nudgeKey, 'Nudge URL', { value: isGrok ? (hub.cfg.grokWebhookUrl ?? '') : (hub.cfg.agentWebhooks[agent]?.url ?? ''), type: 'url', placeholder: 'https://…', locked: lockOf(hub, nudgeKey) })}`)}</div>
   <div class="card flat stack"><h3>3. Test it</h3>${copyField(standingInstructions(), { label: `Instructions for ${name}`, multiline: true, id: `instr-${agent}` })}
@@ -310,7 +327,7 @@ export function connectPanel(hub: Hub, agent: AgentId, ctx: PanelCtx): string {
     case 'claude':
     case 'chatgpt':
     case 'gemini':
-      return mcpPanel(hub, agent);
+      return mcpPanel(hub, agent, ctx);
     case 'instinct':
       return instinctPanel(hub, ctx);
     case 'stanley':

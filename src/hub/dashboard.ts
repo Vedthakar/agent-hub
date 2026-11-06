@@ -56,6 +56,7 @@ const ERR_MESSAGES: Record<string, string> = {
   weak: 'Use at least 10 characters.',
   email: 'Enter your email address and an app password.',
   appPassword: 'That’s not a Gmail app password. Those are 16 letters. Make one at myaccount.google.com/apppasswords. Your normal password won’t work.',
+  samePassword: 'Pick something different from your hub password. The point is to keep yours private.',
   emailLogin: 'Your email provider rejected that login. Check the address and app password.',
 };
 
@@ -434,6 +435,7 @@ export function dashboardRouter(hub: Hub): Router {
     const agent = req.params.agent as AgentId;
     if (!agent.startsWith('custom-')) return res.status(404).end();
     await conn.removeCustomAgent(agent as CustomAgentId);
+    await conn.removeAgentPassword(agent);
     go(res, '/connections', { ok: 'deleted' });
   });
   r.post('/connections/instinct/brain/generate', requireOwner, async (req, res) => {
@@ -445,6 +447,30 @@ export function dashboardRouter(hub: Hub): Router {
     const result = await save({ 'instinct.brainToken': null });
     await store.audit('owner', 'brain.link_removed', {});
     go(res, backTo(req, '/connections/instinct'), result === 'ok' ? { ok: 'saved' } : { err: result });
+  });
+  r.post('/connections/:agent/password', requireOwner, async (req, res) => {
+    const agent = req.params.agent as AgentId;
+    if (!isAgentId(agent) || ADAPTERS[agent].capabilities.readVia !== 'mcp') return res.status(404).end();
+    const back = backTo(req, `/connections/${agent}`);
+    const chosen = String(req.body.password ?? '');
+    if (chosen && chosen.length < 10) return go(res, back, { err: 'weak' });
+    if (chosen && (await conn.verifyOwnerPassword(chosen))) return go(res, back, { err: 'samePassword' });
+    const password = chosen || randomBytes(18).toString('base64url');
+    await conn.setAgentPassword(agent, password);
+    await store.audit('owner', 'agent.password_set', { agent, chosen: Boolean(chosen) });
+    if (chosen) return go(res, back, { ok: 'saved' });
+    // A generated one is only ever shown here, on this response.
+    const revealed = { 'agent.password': password };
+    const view = back.startsWith('/onboarding/') ? renderStep(hub, back.slice('/onboarding/'.length) as Step, revealed) : null;
+    if (view) return send(res, view.title, view.html, { bare: true });
+    send(res, ADAPTERS[agent].name, await connectionDetail(hub, agent, { back: `/connections/${agent}`, revealed }), { nav: 'connections' });
+  });
+  r.post('/connections/:agent/password/remove', requireOwner, async (req, res) => {
+    const agent = req.params.agent as AgentId;
+    if (!isAgentId(agent)) return res.status(404).end();
+    await conn.removeAgentPassword(agent);
+    await store.audit('owner', 'agent.password_removed', { agent });
+    go(res, backTo(req, `/connections/${agent}`), { ok: 'saved' });
   });
   r.post('/connections/:agent/generate', requireOwner, async (req, res) => {
     const agent = req.params.agent as AgentId;

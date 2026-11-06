@@ -22,6 +22,7 @@ const mcpAgents = (): AgentId[] => agentIds().filter((a) => ADAPTERS[a]?.capabil
 export interface OwnerAuth {
   hasOwnerPassword(): boolean;
   verifyOwnerPassword(password: string): Promise<boolean>;
+  verifyConnectPassword(agent: AgentId, password: string): Promise<boolean>;
 }
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -83,19 +84,19 @@ export class HubOAuthProvider implements OAuthServerProvider {
       res.redirect(302, redirect.toString());
       return;
     }
-    if (!this.owner.hasOwnerPassword() || !(await this.owner.verifyOwnerPassword(String(b.password ?? '')))) {
+    if (!isAgentId(b.agent) || !mcpAgents().includes(b.agent)) {
+      res.status(400).send('Pick an agent');
+      return;
+    }
+    if (!this.owner.hasOwnerPassword() || !(await this.owner.verifyConnectPassword(b.agent, String(b.password ?? '')))) {
       res.status(401).type('html').send(
         consentPage({
           client,
           params: { codeChallenge: b.code_challenge, redirectUri: b.redirect_uri, state: b.state, resource: b.resource ? new URL(b.resource) : undefined },
-          selected: isAgentId(b.agent) ? b.agent : 'claude',
-          error: this.owner.hasOwnerPassword() ? 'Wrong password.' : 'Finish setting up the hub (create your password) first.',
+          selected: b.agent,
+          error: this.owner.hasOwnerPassword() ? 'Wrong password for this agent.' : 'Finish setting up the hub (create your password) first.',
         }),
       );
-      return;
-    }
-    if (!isAgentId(b.agent) || !mcpAgents().includes(b.agent)) {
-      res.status(400).send('Pick an agent');
       return;
     }
     const code = newSecret();
@@ -200,18 +201,20 @@ function consentPage(opts: { client: OAuthClientInformationFull; params: Authori
   ).join('');
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Connect to Agent Hub</title>
-<style>body{font:15px system-ui,sans-serif;max-width:420px;margin:12vh auto;padding:0 20px;color:#111}
-label{display:block;margin:14px 0 4px;font-weight:600}input,select{width:100%;padding:9px;font:inherit;box-sizing:border-box}
-.row{display:flex;gap:10px;margin-top:20px}button{flex:1;padding:10px;font:inherit;cursor:pointer}
-.err{color:#b00020}.muted{color:#666}</style></head><body>
-<h2>Connect to Agent Hub</h2>
+<style>body{font:16px/1.55 -apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',sans-serif;max-width:460px;margin:0 auto;padding:12vh 24px 64px;color:#1d1a16;background:#f4efe7;-webkit-font-smoothing:antialiased}
+h1{font-size:44px;line-height:1;letter-spacing:-.04em;font-weight:700;margin:0 0 20px}
+label{display:block;margin:32px 0 12px;font-weight:600}input,select{width:100%;padding:16px 20px;font:inherit;box-sizing:border-box;border:0;border-radius:20px;background:#ebe4d9;color:inherit;-webkit-appearance:none;appearance:none}
+.row{display:flex;align-items:center;justify-content:flex-end;gap:32px;margin-top:48px}button{font:inherit;font-weight:500;cursor:pointer;border:0;background:transparent;color:#7a7165;padding:12px 0}button.go{background:#1d1a16;color:#fbf8f3;border-radius:999px;padding:14px 36px}
+.err{color:#9c4a3c}.muted{color:#7a7165}.help{color:#7a7165;font-size:13px;margin:12px 0 0}</style></head><body>
+<h1>Connect to Agent Hub</h1>
 <p class="muted"><b>${escapeHtml(client.client_name ?? client.client_id)}</b> wants to read your shared situation and receive tasks.</p>
 ${opts.error ? `<p class="err">${escapeHtml(opts.error)}</p>` : ''}
 <form method="post" action="/oauth/consent">
 ${hidden('client_id', client.client_id)}${hidden('redirect_uri', params.redirectUri)}${hidden('code_challenge', params.codeChallenge)}
 ${hidden('state', params.state)}${hidden('resource', params.resource?.toString())}
 <label for="agent">This connection is</label><select id="agent" name="agent">${options}</select>
-<label for="password">Hub owner password</label><input id="password" name="password" type="password" autocomplete="current-password" autofocus>
-<div class="row"><button name="decision" value="deny" type="submit">Deny</button><button name="decision" value="allow" type="submit">Allow</button></div>
+<label for="password">Connection password</label><input id="password" name="password" type="password" autocomplete="off" autofocus>
+<p class="help">The agent's own password, from Connections in your dashboard. If you haven't made one yet, use your hub password.</p>
+<div class="row"><button name="decision" value="deny" type="submit">Deny</button><button class="go" name="decision" value="allow" type="submit">Allow</button></div>
 </form></body></html>`;
 }
