@@ -105,8 +105,16 @@ export function workerBlock(hub: Hub, signedIn: Record<string, boolean | null>, 
   const w = hub.cfg.worker;
   const status = (id: string) => (signedIn[id] === true ? pill('Signed in', 'ok') : signedIn[id] === false ? pill('Signed out', 'warn') : '');
   const login = (dir: string | null) => `${dir ? `CLAUDE_CONFIG_DIR=${JSON.stringify(dir)} ` : ''}claude auth login`;
+  const problemText =
+    hub.workerProblem === 'limit'
+      ? 'This account hit a usage limit.'
+      : hub.workerProblem === 'not_installed'
+        ? 'Claude Code isn’t installed.'
+        : hub.workerProblem === 'network'
+          ? 'Claude Code couldn’t reach the network.'
+          : 'This account is signed out.';
   const problem = hub.workerProblem
-    ? `<div class="banner err"><div><b>${hub.workerProblem === 'limit' ? 'This account hit a usage limit.' : hub.workerProblem === 'not_installed' ? 'Claude Code isn’t installed.' : 'This account is signed out.'}</b> Conversations are waiting. Switch accounts below, or the hub retries by itself.</div></div>`
+    ? `<div class="banner err"><div><b>${problemText}</b> Conversations are waiting. Switch accounts below, or the hub retries by itself.</div></div>`
     : '';
   return `${problem}<form method="post" action="/settings/worker" class="card stack">${hidden('back', back)}
     <p class="muted mb0">Reads conversations and sorts them into memory and tasks, using Claude Code on your Claude plan. No API key and no extra bill. It runs with every tool off, so it can only reply with text. It uses your plan’s limits, up to ${w.maxRunsPerDay} runs a day.</p>

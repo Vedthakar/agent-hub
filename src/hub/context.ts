@@ -106,6 +106,7 @@ export async function buildDebriefDigest(store: Store, opts: { ownerName: string
   const tasks: TaskRow[] = (await store.recentTasks(100)).filter((t) => new Date(t.created_at) >= since).reverse();
   const live: SituationRow[] = (await store.liveSituation(now)).filter((s) => canSee(scope, s.topics));
   const facts: FactRow[] = (await store.activeFacts()).filter((f) => f.kind === 'goal' && canSee(scope, f.topics));
+  const notes = (await store.recentNotes(40)).filter((n) => visible(scope, n.topics, `${n.title} ${n.summary ?? ''}`)).slice(0, 12);
 
   const name = (a: AgentId) => ADAPTERS[a]?.name ?? a;
   const t = (d: Date) => formatLocal(new Date(d), opts.tz, { withDay: false });
@@ -127,6 +128,10 @@ export async function buildDebriefDigest(store: Store, opts: { ownerName: string
   if (facts.length) {
     lines.push('', 'STANDING GOALS');
     for (const f of facts) lines.push(`- ${f.text}`);
+  }
+  if (notes.length) {
+    lines.push('', 'RECENT NOTES FROM THE VAULT');
+    for (const n of notes) lines.push(`- ${n.title}${n.summary ? `: ${n.summary}` : ''}`);
   }
   return { subject: `${opts.ownerName}'s day so far (for tonight's debrief)`, body: lines.join('\n') };
 }

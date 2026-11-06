@@ -65,6 +65,8 @@ describe('background worker', () => {
     expect(expired.reason).toBe('signed_out');
     const limited = (await fails({ code: 1, stdout: JSON.stringify({ is_error: true, result: "You've hit your usage limit" }), stderr: '' })) as WorkerUnavailable;
     expect(limited.reason).toBe('limit');
+    const offline = (await fails({ code: 1, stdout: JSON.stringify({ is_error: true, result: "Can't reach the API server — check your internet or DNS (ENOTFOUND)" }), stderr: '' })) as WorkerUnavailable;
+    expect(offline.reason).toBe('network');
     const missing = (await fails(Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' }))) as WorkerUnavailable;
     expect(missing.reason).toBe('not_installed');
     const other = (await fails({ code: 2, stdout: 'not json', stderr: 'boom' })) as WorkerError;

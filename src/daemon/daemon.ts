@@ -52,12 +52,12 @@ export interface HubClient {
 
 export function httpHubClient(baseUrl: string, token: string, timeoutMs = 20_000): HubClient {
   const url = baseUrl.replace(/\/$/, '');
-  async function call<T>(method: 'GET' | 'POST', route: string, body?: unknown): Promise<T> {
+  async function call<T>(method: 'GET' | 'POST', route: string, body?: unknown, timeout = timeoutMs): Promise<T> {
     const res = await fetch(`${url}${route}`, {
       method,
       headers: { authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) },
       body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(timeout),
     });
     // The hub's error body never echoes message text, but cap it anyway.
     if (!res.ok) throw new HubHttpError(res.status, `${method} ${route} → ${res.status} ${(await res.text().catch(() => '')).slice(0, 200)}`);
@@ -75,7 +75,8 @@ export function httpHubClient(baseUrl: string, token: string, timeoutMs = 20_000
     },
     jobs: async () => (await call<{ jobs: DaemonJob[] }>('GET', '/daemon/jobs')).jobs,
     finishJob: async (id, ok, result, error) => {
-      await call('POST', `/daemon/jobs/${id}`, { ok, result, error });
+      // A history page is the whole conversation so far for that slice. Give it longer than a heartbeat.
+      await call('POST', `/daemon/jobs/${id}`, { ok, result, error }, 120_000);
     },
   };
 }
@@ -316,7 +317,14 @@ export class Daemon {
         const result = await this.runJob(job);
         await hub.finishJob(job.id, true, result);
       } catch (err) {
-        await hub.finishJob(job.id, false, undefined, (err instanceof Error ? err.message : String(err)).slice(0, 500)).catch(() => undefined);
+        const msg = (err instanceof Error ? err.message : String(err)).slice(0, 500);
+        // A dropped connection doesn't mean the page was bad. Leave it claimed so it is tried again,
+        // instead of telling the hub the whole import failed.
+        if (job.kind === 'read-history' && /timeout|aborted|fetch failed|ECONNRESET|ENOTFOUND|ECONNREFUSED|EAI_AGAIN/i.test(msg)) {
+          this.o.log.warn('daemon.history_retry', { id: job.id, error: msg });
+          continue;
+        }
+        await hub.finishJob(job.id, false, undefined, msg).catch(() => undefined);
       }
     }
   }
@@ -334,9 +342,21 @@ export class Daemon {
         this.db ??= this.open();
         this.fullDiskAccess = true;
         const watch = new Set((job.args.handles as string[]).map(normalizeHandle));
-        const after = Number(job.args.afterRowId ?? 0);
-        const { messages, scannedTo } = this.db.readSince(after, watch, 500);
-        return { messages, scannedTo, done: scannedTo === after };
+        let scannedTo = Number(job.args.afterRowId ?? 0);
+        const messages: DaemonMessage[] = [];
+        let done = false;
+        // Most rows belong to other chats. Walk past them in this job, and stop once a post-sized batch is ready.
+        for (let i = 0; i < 40 && messages.length < 30; i++) {
+          const page = this.db.readSince(scannedTo, watch, 400, 30 - messages.length);
+          messages.push(...page.messages);
+          if (page.scannedTo === scannedTo) {
+            done = true;
+            break;
+          }
+          scannedTo = page.scannedTo;
+        }
+        this.o.log.info('daemon.history_page', { messages: messages.length, scannedTo, done });
+        return { messages, scannedTo, done };
       }
       case 'keep-awake': {
         if (!this.o.mac) throw new Error('keep-awake is only available on macOS');

@@ -732,20 +732,72 @@ export class Store {
 
   // ---------- imported history ----------
 
-  /** Returns true if this is new or changed. Unchanged chats keep their folder and cost nothing. A changed chat is read again. */
-  async upsertArchive(a: { source: string; externalId: string; title: string; messages: ArchiveMessage[]; hash: string; startedAt: Date | null; updatedAt: Date | null; kind?: string; folder?: string | null; summary?: string | null }): Promise<boolean> {
+  /**
+   * Returns true if this is new or changed. Unchanged chats keep their folder and cost nothing.
+   * `reprocess` reads a changed chat again (a newer export). `keep` only refreshes the note (a live message
+   * appended to a day). `defer` holds a history page out of the sorter until the import finishes, so a day
+   * isn't filed from its first few lines.
+   */
+  async upsertArchive(
+    a: { source: string; externalId: string; title: string; messages: ArchiveMessage[]; hash: string; startedAt: Date | null; updatedAt: Date | null; kind?: string; folder?: string | null; summary?: string | null },
+    mode: 'reprocess' | 'keep' | 'defer' = 'reprocess',
+  ): Promise<boolean> {
     const ruled = a.kind && a.kind !== 'chat';
+    const deferred = mode === 'defer' && !ruled;
     const rows = await this.db.query(
-      `INSERT INTO archive (source, external_id, title, messages, hash, started_at, updated_at, kind, folder, summary, read_version, organized_at, sorted_at)
-       VALUES ($1, $2, $3, $4::text::jsonb, $5, $6, $7, $8, $9, $10, $11, $12, $12)
+      `INSERT INTO archive (source, external_id, title, messages, hash, started_at, updated_at, kind, folder, summary, read_version, organized_at, sorted_at, sort_attempts)
+       VALUES ($1, $2, $3, $4::text::jsonb, $5, $6, $7, $8, $9, $10, $11, $12, $12, $13)
        ON CONFLICT (source, external_id) DO UPDATE
          SET title = EXCLUDED.title, messages = EXCLUDED.messages, hash = EXCLUDED.hash, updated_at = EXCLUDED.updated_at, needs_write = true,
-             read_version = LEAST(archive.read_version, EXCLUDED.read_version), organized_at = COALESCE(EXCLUDED.organized_at, archive.organized_at)
+             read_version = CASE $14
+               WHEN 'keep' THEN archive.read_version
+               WHEN 'defer' THEN 99
+               ELSE CASE WHEN EXCLUDED.read_version >= 99 THEN EXCLUDED.read_version ELSE 0 END
+             END,
+             organized_at = CASE $14
+               WHEN 'keep' THEN archive.organized_at
+               WHEN 'defer' THEN NULL
+               ELSE EXCLUDED.organized_at
+             END,
+             sort_attempts = CASE $14
+               WHEN 'keep' THEN archive.sort_attempts
+               WHEN 'defer' THEN 99
+               ELSE CASE WHEN EXCLUDED.read_version >= 99 THEN archive.sort_attempts ELSE 0 END
+             END
          WHERE archive.hash <> EXCLUDED.hash
        RETURNING id`,
-      [a.source, a.externalId, a.title, toJson(a.messages), a.hash, a.startedAt, a.updatedAt, a.kind ?? 'chat', a.folder ?? null, a.summary ?? null, ruled ? 99 : 0, a.kind === 'memory' ? new Date() : null],
+      [
+        a.source,
+        a.externalId,
+        a.title,
+        toJson(a.messages),
+        a.hash,
+        a.startedAt,
+        a.updatedAt,
+        a.kind ?? 'chat',
+        a.folder ?? null,
+        a.summary ?? null,
+        deferred || ruled ? 99 : 0,
+        a.kind === 'memory' ? new Date() : null,
+        deferred ? 99 : 0,
+        mode,
+      ],
     );
     return rows.length > 0;
+  }
+
+  /** History held these back. Let the sorter read them now that every page is in. */
+  async releaseDeferredArchive(): Promise<void> {
+    await this.db.query(`UPDATE archive SET read_version = 0, organized_at = NULL, sort_attempts = 0 WHERE read_version = 99 AND sort_attempts = 99`);
+  }
+
+  /** Titles and summaries only, newest first, for Instinct's digest. */
+  recentNotes(limit = 40): Promise<Pick<ArchiveRow, 'title' | 'summary' | 'topics' | 'source' | 'updated_at'>[]> {
+    return this.db.query(
+      `SELECT title, summary, topics, source, updated_at FROM archive
+       ORDER BY updated_at DESC NULLS LAST, id DESC LIMIT $1`,
+      [limit],
+    );
   }
 
   async archiveByKey(source: string, externalId: string): Promise<ArchiveRow | undefined> {
@@ -826,18 +878,24 @@ export class Store {
     return row;
   }
 
-  /** Jobs for the daemon: pending ones, plus claims that were never finished. Old jobs are pruned (results can hold handles). */
+  /**
+   * Jobs for the daemon: pending ones, plus claims that were never finished. Old jobs are pruned (results can
+   * hold handles). A history read walks the whole Messages database, so it is not thrown away after 10 minutes
+   * or a day; a lost claim is picked up again after 10 minutes.
+   */
   async claimJobs(limit = 5): Promise<DaemonJobRow[]> {
-    await this.db.query("DELETE FROM daemon_jobs WHERE created_at < now() - interval '1 day'");
+    await this.db.query(`DELETE FROM daemon_jobs WHERE created_at < now() - interval '1 day' AND (kind <> 'read-history' OR status IN ('done', 'failed'))`);
     await this.db.query(
       `UPDATE daemon_jobs SET status = 'failed', error = 'the Mac did not pick this up in time', done_at = now()
-       WHERE status = 'pending' AND created_at < now() - interval '10 minutes'`,
+       WHERE status = 'pending' AND kind <> 'read-history' AND created_at < now() - interval '10 minutes'`,
     );
     return this.db.query(
       `UPDATE daemon_jobs SET status = 'claimed', claimed_at = now()
        WHERE id IN (
          SELECT id FROM daemon_jobs
-         WHERE status = 'pending' OR (status = 'claimed' AND claimed_at < now() - interval '2 minutes')
+         WHERE status = 'pending'
+            OR (status = 'claimed' AND kind <> 'read-history' AND claimed_at < now() - interval '2 minutes')
+            OR (status = 'claimed' AND kind = 'read-history' AND claimed_at < now() - interval '10 minutes')
          ORDER BY created_at, id LIMIT $1
          FOR UPDATE SKIP LOCKED
        ) RETURNING *`,
@@ -854,10 +912,32 @@ export class Store {
     return rows[0];
   }
 
+  /** A hub restart orphans a claim the Mac was in the middle of. Put it back so the import continues. */
+  async releaseHistoryClaims(): Promise<void> {
+    await this.db.query(`UPDATE daemon_jobs SET status = 'pending', claimed_at = NULL WHERE kind = 'read-history' AND status = 'claimed'`);
+  }
+
   /** Is a history read still waiting on, or being done by, your Mac? */
   async historyJobActive(): Promise<boolean> {
-    const rows = await this.db.query("SELECT 1 FROM daemon_jobs WHERE kind = 'read-history' AND status IN ('pending', 'claimed') AND created_at > now() - interval '10 minutes' LIMIT 1");
+    const rows = await this.db.query("SELECT 1 FROM daemon_jobs WHERE kind = 'read-history' AND status IN ('pending', 'claimed') LIMIT 1");
     return rows.length > 0;
+  }
+
+  /** A session the worker couldn't reach is put back, instead of staying dead after a DNS blip. */
+  async requeueTransientFailures(): Promise<number> {
+    const rows = await this.db.query<{ id: number }>(
+      `UPDATE events SET dead_lettered_at = NULL, next_route_at = NULL, route_attempts = 0
+       WHERE dead_lettered_at IS NOT NULL
+         AND last_error ~* 'ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|getaddrinfo|Can''t reach the API'
+       RETURNING id`,
+    );
+    if (rows.length) {
+      await this.db.query(
+        `UPDATE dead_letters SET resolved_at = now(), resolution = 'retry' WHERE resolved_at IS NULL AND kind = 'route' AND ref_id = ANY($1::bigint[])`,
+        [rows.map((r) => r.id)],
+      );
+    }
+    return rows.length;
   }
 
   async job(id: number): Promise<DaemonJobRow | undefined> {

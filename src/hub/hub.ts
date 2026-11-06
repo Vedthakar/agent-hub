@@ -119,6 +119,7 @@ export class Hub {
   async ingestDaemon(messages: DaemonMessage[]): Promise<{ accepted: number; commands: number }> {
     let accepted = 0;
     let commands = 0;
+    const filed: DaemonMessage[] = [];
     const approvalHandle = this.cfg.approval.channel === 'imessage' ? this.cfg.approval.imessageHandle : null;
     const ordered = [...messages].sort((a, b) => a.rowid - b.rowid);
     for (const m of ordered) {
@@ -145,8 +146,15 @@ export class Hub {
       const inserted = await this.store.insertRawMessages([{ agent, externalId: m.guid, channel: 'imessage', author, text, sentAt }]);
       if (!inserted.length) continue;
       accepted++;
+      filed.push({ ...m, text });
       await this.store.touchRead(agent);
       if (agent === 'instinct' && author === 'user' && (await noteDebriefStart(this.ctx, inserted[0]))) this.kick();
+    }
+    // The same lines become that day's note in the vault, so Obsidian stays current without waiting for the old-chat import.
+    if (filed.length) {
+      await this.importer.addHistory(filed, (handle) => this.agentForHandle(handle)).catch(async (err) => {
+        await this.store.audit('hub', 'import.step_failed', { error: (err as Error).message.slice(0, 200) });
+      });
     }
     return { accepted, commands };
   }
@@ -293,7 +301,9 @@ export class Hub {
 
   async pollReads(): Promise<number> {
     let read = 0;
+    const scopes = await this.store.scopes();
     for (const a of Object.values(ADAPTERS)) {
+      if (scopes.get(a.id)?.enabled === false) continue;
       try {
         read += await a.readEvents(this.ctx);
       } catch (err) {
@@ -363,6 +373,11 @@ export class Hub {
   }
 
   start(): () => void {
+    void this.store.requeueTransientFailures().catch((err) => log.warn('router.requeue_failed', { error: String(err) }));
+    void this.store.releaseHistoryClaims().catch((err) => log.warn('import.history_release_failed', { error: String(err) }));
+    void this.store.getSetting<{ state?: string; afterRowId?: number } | null>('import.history', null).then((hist) => {
+      log.info('import.history_state', { state: hist?.state ?? 'none', afterRowId: hist?.afterRowId ?? null });
+    }).catch((err) => log.warn('import.history_state_failed', { error: String(err) }));
     const timer = setInterval(() => {
       this.tick().catch((err) => log.error('hub.tick_failed', { error: String(err) }));
     }, this.cfg.router.tickMs);

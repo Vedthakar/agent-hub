@@ -33,7 +33,7 @@ export class WorkerError extends Error {
 export class WorkerUnavailable extends WorkerError {
   constructor(
     message: string,
-    readonly reason: 'signed_out' | 'limit' | 'not_installed',
+    readonly reason: 'signed_out' | 'limit' | 'not_installed' | 'network',
     retryAfterMs: number,
   ) {
     super(message, true, retryAfterMs);
@@ -84,6 +84,9 @@ const LIMIT_WAIT_MS = 30 * 60_000;
 function unavailable(text: string): WorkerUnavailable | null {
   if (/not logged in|\/login|invalid api key|authenticat|unauthorized|oauth/i.test(text)) {
     return new WorkerUnavailable('The worker account is signed out', 'signed_out', LIMIT_WAIT_MS);
+  }
+  if (/ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|getaddrinfo|can'?t reach the api|fetch failed/i.test(text)) {
+    return new WorkerUnavailable('Claude Code couldn’t reach the network', 'network', LIMIT_WAIT_MS);
   }
   if (/usage limit|limit reached|hit your .*limit|rate.?limit|resets? (at|in)|overloaded|credit balance/i.test(text)) {
     return new WorkerUnavailable('The worker account hit a usage limit', 'limit', LIMIT_WAIT_MS);

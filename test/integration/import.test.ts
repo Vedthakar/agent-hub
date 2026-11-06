@@ -122,6 +122,23 @@ describe('importing', () => {
     expect((await store.archiveById(id))!.folder).toBe('School');
   });
 
+  it('reads a chat again when a newer export changes it', async () => {
+    const { hub, store, cfg, worker } = await setup();
+    drop(cfg.vaultPath, 'a.json', JSON.stringify([claude('k1', 'Eigenvalues', 'Explain eigenvalues')]));
+    await file(hub);
+    const id = (await store.searchArchive('eigenvalues'))[0].id;
+    worker.next.push(() => ({ items: [{ id, area: 'School', summary: 'Eigenvalues for linear algebra.' }] }));
+    worker.next.push(() => ({ folders: [{ path: 'School/Linear Algebra', ids: [id] }] }));
+    await hub.importer.sortStep(soon(2));
+    await hub.importer.sortStep(soon(4));
+    drop(cfg.vaultPath, 'b.json', JSON.stringify([claude('k1', 'Eigenvalues', 'Explain eigenvalues again, with a worked example')]));
+    await file(hub);
+    const row = (await store.archiveById(id))!;
+    expect(row.read_version).toBe(0);
+    expect(row.organized_at).toBeNull();
+    expect(row.messages.map((m) => m.text).join(' ')).toContain('worked example');
+  });
+
   it('a broken file is set aside and reported, and doesn’t stop the rest', async () => {
     const { hub, cfg } = await setup();
     drop(cfg.vaultPath, 'broken.json', '{{{');
@@ -436,5 +453,49 @@ describe('iMessage history', () => {
     const [job] = await store.claimJobs();
     await fetch(`${url}/daemon/jobs/${job.id}`, { method: 'POST', headers: { authorization: 'Bearer daemon-token', 'content-type': 'application/json' }, body: JSON.stringify({ ok: false, error: 'unknown job read-history' }) });
     expect(await store.getSetting('import.history', null)).toMatchObject({ state: 'failed', error: 'unknown job read-history' });
+  });
+
+  it('turns a recent history page into conversation lines, and leaves an old page as a note', async () => {
+    const { store, url } = await setup();
+    await store.enqueueJob('read-history', { handles: [HANDLES.instinct], afterRowId: 0 });
+    const [job] = await store.claimJobs();
+    const recent = new Date(Date.now() - 2 * 60_000).toISOString();
+    await fetch(`${url}/daemon/jobs/${job.id}`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer daemon-token', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ok: true,
+        result: {
+          messages: [
+            page(1, HANDLES.instinct, 'what should I work on tonight', true, recent),
+            page(2, HANDLES.instinct, 'plan my week from march', true, '2026-03-14T15:00:00Z'),
+          ],
+          scannedTo: 2,
+          done: true,
+        },
+      }),
+    });
+    const raw = await store.db.query<{ text: string }>('SELECT text FROM raw_messages ORDER BY id');
+    expect(raw.map((r) => r.text)).toEqual(['what should I work on tonight']);
+    expect((await store.searchArchive('plan my week from march')).length).toBe(1);
+    expect(await store.recentEvents(5)).toEqual([]);
+  });
+
+  it('files a live Instinct message into that day’s note', async () => {
+    const { hub, store } = await setup();
+    await hub.ingestDaemon([{ guid: 'live-1', rowid: 1, handle: HANDLES.instinct, isFromMe: true, text: 'plan the week with instinct', sentAt: '2026-03-14T15:00:00Z', service: 'iMessage' }]);
+    const [row] = await store.searchArchive('plan the week');
+    expect([row.source, row.messages.map((m) => m.text)]).toEqual(['instinct', ['plan the week with instinct']]);
+  });
+
+  it('continues a history import whose job was lost, and does not throw a waiting one away', async () => {
+    const { hub, store } = await setup();
+    await store.setSetting('import.history', { state: 'reading', afterRowId: 40, handles: [HANDLES.instinct] });
+    await hub.importer.resumeHistory();
+    const [job] = await store.claimJobs();
+    expect([job.kind, job.args]).toEqual(['read-history', { handles: [HANDLES.instinct], afterRowId: 40 }]);
+    await store.db.query("UPDATE daemon_jobs SET status = 'pending', claimed_at = NULL, created_at = now() - interval '2 days' WHERE id = $1", [job.id]);
+    const [again] = await store.claimJobs();
+    expect(again.id).toBe(job.id);
   });
 });

@@ -165,10 +165,28 @@ export class Importer {
   }
 
   async step(now = new Date()): Promise<void> {
+    await this.resumeHistory();
     await this.scanFolder(now);
     await this.scanCodeSessions(now);
     await this.writeNotes();
     await this.sortStep(now);
+  }
+
+  /**
+   * The history import records where it got to, then asks the Mac for the next page. If that job is lost
+   * (the helper restarted, or the page was too big to finish), pick it up from the same place.
+   */
+  async resumeHistory(): Promise<void> {
+    const hist = await this.hub.store.getSetting<{ state?: string; afterRowId?: number; handles?: string[]; error?: string } | null>('import.history', null);
+    const stalled = hist?.state === 'failed' && /timeout|aborted|fetch failed|ECONN|ENOTFOUND|EAI_AGAIN/i.test(String(hist.error ?? ''));
+    if (hist?.state !== 'reading' && !stalled) return;
+    if (await this.hub.store.historyJobActive()) return;
+    const configured = (['instinct', 'stanley', 'boardy'] as const).map((a) => this.hub.cfg.imessageHandles[a]).filter((h): h is string => Boolean(h));
+    const handles = hist.handles?.length ? hist.handles : configured;
+    if (!handles.length) return;
+    const afterRowId = hist.afterRowId ?? 0;
+    await this.hub.store.enqueueJob('read-history', { handles, afterRowId });
+    log.info('import.history_resume', { afterRowId, handles: handles.length });
   }
 
   /** Drop an export in Import/. A file still downloading is left alone until it stops changing. */
@@ -235,15 +253,21 @@ export class Importer {
   }
 
   /** Re-importing a newer export only touches chats that changed. Returns true if anything was new. */
-  private async save(raw: ImportedConversation): Promise<boolean> {
+  private async save(raw: ImportedConversation, mode: 'reprocess' | 'keep' | 'defer' = 'reprocess'): Promise<boolean> {
     const c = { ...raw, title: redactSecrets(raw.title), messages: raw.messages.map((m) => ({ ...m, text: redactSecrets(m.text) })) };
     const hash = createHash('sha256').update(JSON.stringify(c.messages.map((m) => [m.role, m.text]))).digest('hex').slice(0, 24);
     const times = c.messages.map((m) => m.at).filter((t): t is string => Boolean(t)).sort();
-    return this.hub.store.upsertArchive({ source: c.source, externalId: c.externalId, title: c.title.slice(0, 200), messages: c.messages, hash, startedAt: times[0] ? new Date(times[0]) : null, updatedAt: times.at(-1) ? new Date(times.at(-1)!) : null, kind: c.kind ?? 'chat', folder: c.folder ?? null, summary: c.summary ?? null });
+    return this.hub.store.upsertArchive(
+      { source: c.source, externalId: c.externalId, title: c.title.slice(0, 200), messages: c.messages, hash, startedAt: times[0] ? new Date(times[0]) : null, updatedAt: times.at(-1) ? new Date(times.at(-1)!) : null, kind: c.kind ?? 'chat', folder: c.folder ?? null, summary: c.summary ?? null },
+      mode,
+    );
   }
 
-  /** A page of iMessage history from your Mac. One conversation per thread per day, so it reads like a journal. */
-  async addHistory(messages: DaemonMessage[], agentFor: (handle: string) => string | null): Promise<void> {
+  /**
+   * A page of iMessage history, or the messages that just arrived. One conversation per thread per day, so it
+   * reads like a journal. `defer` holds the page out of the sorter until the history import says it's done.
+   */
+  async addHistory(messages: DaemonMessage[], agentFor: (handle: string) => string | null, opts?: { defer?: boolean }): Promise<void> {
     const days = new Map<string, { agent: string; date: string; messages: ArchiveMessage[] }>();
     for (const m of messages) {
       const agent = agentFor(m.handle);
@@ -258,7 +282,7 @@ export class Importer {
       // A page can repeat a message: chat.db lists a message once per chat it's joined to.
       const merged = [...new Map([...(existing?.messages ?? []), ...day.messages].map((m) => [m.id, m])).values()];
       const name = ADAPTERS[day.agent as keyof typeof ADAPTERS]?.name ?? day.agent;
-      await this.save({ source: day.agent, externalId: key, title: `${name}, ${day.date}`, messages: merged });
+      await this.save({ source: day.agent, externalId: key, title: `${name}, ${day.date}`, messages: merged }, opts?.defer ? 'defer' : 'keep');
     }
   }
 

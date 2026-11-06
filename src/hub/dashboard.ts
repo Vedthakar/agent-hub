@@ -456,8 +456,8 @@ export function dashboardRouter(hub: Hub): Router {
 
   r.get('/settings', requireOwner, async (req, res) => {
     const signedIn = Object.fromEntries(await Promise.all(cfg.worker.accounts.map(async (a) => [a.id, await accountSignedIn(cfg.worker, a)] as const)));
-    let history = await store.getSetting<{ state: string; error?: string } | null>('import.history', null);
-    if (history?.state === 'reading' && !(await store.historyJobActive())) history = { state: 'failed', error: 'your Mac helper didn’t pick this up' };
+    await hub.importer.resumeHistory();
+    const history = await store.getSetting<{ state: string; error?: string } | null>('import.history', null);
     const imports = { status: await hub.importer.status(), history };
     send(res, 'Settings', settingsBody(hub, signedIn, imports), { nav: 'settings', ...flashOf(req) });
   });
@@ -511,7 +511,7 @@ export function dashboardRouter(hub: Hub): Router {
   r.post('/settings/import/history', requireOwner, async (_req, res) => {
     const handles = (['instinct', 'stanley', 'boardy'] as const).map((a) => cfg.imessageHandles[a]).filter((x): x is string => Boolean(x));
     if (!handles.length) return go(res, '/settings', { err: 'invalid' });
-    await store.setSetting('import.history', { state: 'reading' });
+    await store.setSetting('import.history', { state: 'reading', afterRowId: 0, handles });
     await store.enqueueJob('read-history', { handles, afterRowId: 0 });
     await store.audit('owner', 'import.history_started', {});
     res.redirect(303, '/settings#import');

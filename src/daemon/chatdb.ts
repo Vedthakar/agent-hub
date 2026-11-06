@@ -22,7 +22,10 @@ interface Row {
   is_from_me: bigint;
   date: bigint;
   service: string | null;
+  /** The sender's handle. Null on many outgoing rows, where the chat identifier is the only name. */
   handle: string | null;
+  /** The conversation the row belongs to. The thread picker stores this, and it can differ from `handle`. */
+  chat: string | null;
 }
 
 /**
@@ -54,11 +57,15 @@ export class ChatDb {
   /**
    * Rows after `afterRowId` in 1:1 conversations. Returns the highest ROWID scanned so the caller can
    * advance past rows it chose not to forward. Tapbacks and group-event rows are skipped.
+   *
+   * A thread matches if either the sender handle or the chat identifier is watched. Outgoing rows often
+   * have no sender handle, and the chat identifier (what the thread picker stores) can be an email while
+   * the handle row is a phone number. `maxMessages` keeps one page small enough to post.
    */
-  readSince(afterRowId: number, watch: Set<string>, limit = 500): { messages: DaemonMessage[]; scannedTo: number } {
+  readSince(afterRowId: number, watch: Set<string>, limit = 500, maxMessages = 40): { messages: DaemonMessage[]; scannedTo: number } {
     const stmt = this.db.prepare(
         `SELECT m.ROWID AS rowid, m.guid, m.text, m.attributedBody, m.is_from_me, m.date, m.service,
-                COALESCE(h.id, c.chat_identifier) AS handle
+                h.id AS handle, c.chat_identifier AS chat
          FROM message m
          LEFT JOIN handle h ON h.ROWID = m.handle_id
          LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
@@ -75,26 +82,40 @@ export class ChatDb {
     const rows = stmt.all(afterRowId, limit) as unknown as Row[];
 
     let scannedTo = afterRowId;
+    let chars = 0;
     const messages: DaemonMessage[] = [];
     const seen = new Set<number>();
     for (const r of rows) {
       const rowid = Number(r.rowid);
-      scannedTo = Math.max(scannedTo, rowid);
-      if (seen.has(rowid) || !r.handle) continue;
+      if (seen.has(rowid)) continue;
       seen.add(rowid);
-      if (!watch.has(normalizeHandle(r.handle))) continue;
+      const chatNorm = r.chat ? normalizeHandle(r.chat) : '';
+      const handleNorm = r.handle ? normalizeHandle(r.handle) : '';
+      const watched = watch.has(chatNorm) ? r.chat : watch.has(handleNorm) ? r.handle : null;
+      if (!watched) {
+        scannedTo = Math.max(scannedTo, rowid);
+        continue;
+      }
       let text: string;
       try {
         text = cleanMessageText(r.text ?? decodeAttributedBody(r.attributedBody));
       } catch {
         this.undecodable++;
+        scannedTo = Math.max(scannedTo, rowid);
         continue;
       }
-      if (!text) continue;
+      if (!text) {
+        scannedTo = Math.max(scannedTo, rowid);
+        continue;
+      }
+      // Stop before this row so the next page starts here, instead of skipping the rest of the scan.
+      if (messages.length >= maxMessages || chars >= 120_000) break;
+      scannedTo = Math.max(scannedTo, rowid);
+      chars += text.length;
       messages.push({
         guid: r.guid,
         rowid,
-        handle: r.handle,
+        handle: watched,
         isFromMe: Number(r.is_from_me) === 1,
         text,
         sentAt: appleDateToIso(r.date),

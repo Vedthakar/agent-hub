@@ -42,21 +42,48 @@ export function hookSecret(cfg: HubConfig, agent: AgentId): string | null {
 
 /** History pages go straight into the archive and the next page is queued. Message text is never kept on the job. */
 const HistoryPage = z.object({ messages: z.array(z.object({ guid: z.string(), rowid: z.number(), handle: z.string(), isFromMe: z.boolean(), text: z.string().nullable(), sentAt: z.string() }).passthrough()), scannedTo: z.number(), done: z.boolean() });
+
+/** How far back a history page may also become a live conversation. Older than this stays in the library only. */
+const RECENT_CATCHUP_MS = 48 * 60 * 60 * 1000;
+
+/**
+ * The live reader can miss a thread when the sender's handle and the chat identifier differ, so those lines
+ * never became events. A history page from the last two days fills that gap. Anything older stays a note:
+ * replaying years of chat would turn it into current tasks.
+ */
+async function catchUpRecent(hub: Hub, messages: { guid: string; handle: string; isFromMe: boolean; text: string | null; sentAt: string }[]): Promise<void> {
+  const cutoff = Date.now() - RECENT_CATCHUP_MS;
+  const rows = [];
+  for (const m of messages) {
+    const text = (m.text ?? '').trim();
+    const sentAt = new Date(m.sentAt);
+    if (!text || Number.isNaN(sentAt.getTime()) || sentAt.getTime() < cutoff) continue;
+    const agent = hub.agentForHandle(m.handle);
+    if (!agent) continue;
+    rows.push({ agent, externalId: m.guid, channel: 'imessage', author: m.isFromMe ? ('user' as const) : ('agent' as const), text, sentAt });
+  }
+  if (rows.length) await hub.store.insertRawMessages(rows);
+}
 async function finishHistoryJob(hub: Hub, job: DaemonJobRow, ok: boolean, body: { result?: unknown; error?: unknown }): Promise<void> {
   const page = ok ? HistoryPage.safeParse(body.result) : null;
+  const handles = Array.isArray(job.args.handles) ? (job.args.handles as string[]) : [];
   if (!page?.success) {
     await hub.store.finishJob(job.id, false, null, String(body.error ?? 'bad history page').slice(0, 500));
-    await hub.store.setSetting('import.history', { state: 'failed', error: String(body.error ?? 'bad history page').slice(0, 200) });
+    await hub.store.setSetting('import.history', { state: 'failed', error: String(body.error ?? 'bad history page').slice(0, 200), handles, afterRowId: Number(job.args.afterRowId ?? 0) });
     return;
   }
-  await hub.importer.addHistory(page.data.messages as unknown as DaemonMessage[], (handle) => hub.agentForHandle(handle));
+  // Held out of the sorter until the last page, so a day isn't filed from its first lines.
+  await hub.importer.addHistory(page.data.messages as unknown as DaemonMessage[], (handle) => hub.agentForHandle(handle), { defer: true });
+  await catchUpRecent(hub, page.data.messages);
+  log.info('import.history_page', { messages: page.data.messages.length, scannedTo: page.data.scannedTo, done: page.data.done });
   await hub.store.finishJob(job.id, true, null, null);
   if (page.data.done) {
+    await hub.store.releaseDeferredArchive();
     await hub.store.setSetting('import.history', { state: 'done' });
     await hub.store.audit('hub', 'import.history_done', {});
   } else {
-    await hub.store.setSetting('import.history', { state: 'reading' });
-    await hub.store.enqueueJob('read-history', { ...job.args, afterRowId: page.data.scannedTo });
+    await hub.store.setSetting('import.history', { state: 'reading', afterRowId: page.data.scannedTo, handles });
+    await hub.store.enqueueJob('read-history', { handles, afterRowId: page.data.scannedTo });
   }
   hub.kick();
 }
