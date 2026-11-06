@@ -165,7 +165,9 @@ describe('onboarding wizard', () => {
     expect((await b.get('/onboarding')).headers.get('location')).toBe('/onboarding/welcome');
     expect(await b.html('/onboarding/welcome')).toMatch(/Step 1 of \d+/);
     expect((await b.submit('/onboarding/welcome', { 'owner.name': 'Ved', 'owner.timezone': 'Not/AZone' }))).toBe('/onboarding/welcome?err=invalid');
-    expect(await b.submit('/onboarding/welcome', { 'owner.name': 'Ved', 'owner.timezone': 'America/Los_Angeles' })).toBe('/onboarding/mac');
+    expect(await b.submit('/onboarding/welcome', { 'owner.name': 'Ved', 'owner.timezone': 'America/Los_Angeles' })).toBe('/onboarding/agents');
+    // Which agents comes first: picking one that lives in iMessage is what adds the Mac steps.
+    expect(await b.submit('/onboarding/agents', { agent: ['claude', 'instinct', 'grok'] })).toBe('/onboarding/mac');
     expect([h.cfg.ownerName, h.cfg.timezone]).toEqual(['Ved', 'America/Los_Angeles']);
 
     // Step 2: connect the Mac and grant Full Disk Access.
@@ -210,11 +212,11 @@ describe('onboarding wizard', () => {
 
     // Step 5: the background worker is opt-in, and turning it on stores no key anywhere.
     expect(h.cfg.worker.enabled).toBe(false);
-    expect(await b.submit('/onboarding/brain', { enabled: '1' })).toBe('/onboarding/agents');
+    expect(await b.submit('/onboarding/brain', { enabled: '1' })).toBe('/onboarding/agent-claude');
     expect(h.cfg.worker.enabled).toBe(true);
 
     // Step 6: pick agents. Picked ones are switched on, the rest off, and each gets its own step.
-    expect(await b.submit('/onboarding/agents', { agent: ['claude', 'instinct', 'grok'] })).toBe('/onboarding/agent-claude');
+    expect(await b.get('/onboarding/agents').then((r) => r.status)).toBe(200); // still there to go back to
     const scopes = await h.store.scopes();
     expect(['claude', 'instinct', 'grok', 'stanley', 'boardy', 'chatgpt', 'gemini'].map((a) => scopes.get(a as never)?.enabled)).toEqual([true, true, true, false, false, false, false]);
 
@@ -278,7 +280,7 @@ describe('onboarding wizard', () => {
     await b.login();
     expect(await b.html('/')).toContain('Finish setting up');
     await b.submit('/onboarding/welcome', { 'owner.name': 'Ved', 'owner.timezone': 'America/New_York' });
-    expect((await b.get('/onboarding')).headers.get('location')).toBe('/onboarding/mac');
+    expect((await b.get('/onboarding')).headers.get('location')).toBe('/onboarding/agents');
     expect(await b.submit('/onboarding/skip-all')).toBe('/');
     expect(await b.html('/')).not.toContain('Finish setting up');
     // Unknown steps bounce back to the wizard instead of erroring.
@@ -312,11 +314,20 @@ describe('onboarding wizard', () => {
     expect(h.cfg.email.smtpUrl).toContain(':abcdefghijklmnop@');
   });
 
+  it('someone without iMessage agents never sees Mac setup', async () => {
+    const h = await hubFor({});
+    const b = browser(h.url);
+    await b.login();
+    await b.submit('/onboarding/welcome', { 'owner.name': 'Sam', 'owner.timezone': 'America/New_York' });
+    expect(await b.submit('/onboarding/agents', { agent: ['claude', 'chatgpt'] })).toBe('/onboarding/brain');
+    expect((await b.get('/onboarding/mac')).status).not.toBe(200);
+  });
+
   it('skips the worker step when it is set from the environment', async () => {
     const h = await hubFor({ WORKER_ENABLED: '1' });
     const b = browser(h.url);
     await b.login();
-    expect(await b.submit('/onboarding/phone', { 'approval.handle': HANDLES.approval })).toBe('/onboarding/agents');
+    expect(await b.submit('/onboarding/agents', { agent: ['claude'] })).toBe('/onboarding/agent-claude');
   });
 });
 

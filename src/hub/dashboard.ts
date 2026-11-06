@@ -217,7 +217,7 @@ export function dashboardRouter(hub: Hub): Router {
   // ---------- first run + sign in ----------
 
   const welcomePage = (token: string, error?: string) =>
-    page('Set up', `<div class="card stack" style="margin-top:6vh"><h1>Welcome to Agent Hub</h1>
+    page('Set up', `<div class="stack"><h1>Welcome to Agent Hub</h1>
       <p class="muted">First, create the password you’ll use to open this dashboard and approve agent connections.</p>
       ${error ? `<p class="flash err">${h(error)}</p>` : ''}
       <form method="post" action="/welcome">
@@ -254,7 +254,7 @@ export function dashboardRouter(hub: Hub): Router {
 
   r.get('/login', (_req, res) => {
     if (!conn.hasOwnerPassword()) return res.redirect(302, '/welcome');
-    send(res, 'Sign in', `<form method="post" action="/login" class="card stack" style="margin-top:10vh"><h1>Sign in</h1>
+    send(res, 'Sign in', `<form method="post" action="/login" class="stack"><h1>Sign in</h1>
       ${field('password', 'Password', { type: 'password', autocomplete: 'current-password', required: true })}
       <button class="btn big block">Sign in</button></form>`, { bare: true });
   });

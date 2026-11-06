@@ -1,0 +1,13 @@
+services:
+  hub:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      # Set this to your public https:// address so Claude, ChatGPT and Gemini can connect.
+      HUB_PUBLIC_URL: ${HUB_PUBLIC_URL:-http://localhost:8787}
+    volumes:
+      - hub-data:/data
+volumes:
+  hub-data:

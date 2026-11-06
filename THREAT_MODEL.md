@@ -1,6 +1,6 @@
 # Agent Hub threat model
 
-Agent Hub reads Ved's conversations with seven AI agents, keeps a shared picture of what he is doing,
+Agent Hub reads the owner's conversations with seven AI agents, keeps a shared picture of what he is doing,
 and hands tasks from one agent to another after he approves them by text. That makes it a high-value
 target: it holds private context (school, health, money, relationships), it can make agents act, and
 most of what it reads is written by software that an attacker can talk to.
@@ -13,28 +13,28 @@ mitigated, which tests prove it, and what risk remains. The pass/fail table at t
 
 | Asset | Where it lives | Why it matters |
 |---|---|---|
-| Ved's conversations | chat.db (read only), `raw_messages`, `events` | Private by default; the source of everything else |
+| the owner's conversations | chat.db (read only), `raw_messages`, `events` | Private by default; the source of everything else |
 | Shared situation and facts | `situation`, `facts` | Shown to other agents; school, health, finance and personal items must stay with the agents allowed to see them |
-| Hand-off authority | `tasks`, approval codes | Approving a task makes an agent act in Ved's name (emails Boardy, posts via Grok, briefs Stanley) |
+| Hand-off authority | `tasks`, approval codes | Approving a task makes an agent act in the owner's name (emails Boardy, posts via Grok, briefs Stanley) |
 | Credentials | env only: owner password, daemon token, agent tokens, OAuth tokens (hashed), Twilio / Telegram / SMTP / LLM keys, `DATABASE_URL` | Each one unlocks a door into the hub |
-| Ved's own threads | iMessage / Telegram / email threads he chats in | The hub must never write into them |
+| the owner's own threads | iMessage / Telegram / email threads he chats in | The hub must never write into them |
 
 ## Actors
 
 | Actor | Can do | Trust |
 |---|---|---|
-| Ved | Texts agents; approves, rejects, pauses; uses the dashboard | Trusted, authenticated by device or password |
+| the owner | Texts agents; approves, rejects, pauses; uses the dashboard | Trusted, authenticated by device or password |
 | The seven agents | Send messages that the hub reads; MCP agents call tools | Untrusted content. Any agent can be prompt-injected, compromised, or simply wrong |
 | Third parties who reach an agent | Email Boardy, message Stanley, put text in web pages an agent reads | Untrusted, and they control what the agent then says |
 | The router model | Reads conversations, proposes situation items and tasks | Untrusted output. Assume it can be fully fooled by its input |
-| Network attackers / strangers | Hit the public HTTPS endpoints, text Ved's numbers, spoof email From headers | Untrusted |
+| Network attackers / strangers | Hit the public HTTPS endpoints, text the owner's numbers, spoof email From headers | Untrusted |
 | Someone with the database | Supabase anon/authenticated keys, a DB dump | Must get nothing usable |
 
 ## Trust boundaries
 
 ```mermaid
 flowchart LR
-  subgraph Mac["Ved's Mac"]
+  subgraph Mac["the owner's Mac"]
     chatdb[(chat.db<br/>read-only)] --> daemon[Daemon]
   end
   subgraph Hub["Hub server"]
@@ -47,7 +47,7 @@ flowchart LR
   agents[MCP agents] -- OAuth / agent token --> ingest
   tg[Stanley Telegram side channel] --> ingest
   mail[Boardy email over IMAP] --> ingest
-  ved[Ved: iMessage / SMS / Telegram bot / dashboard] -- own device, code, password --> approvals
+  ved[the owner: iMessage / SMS / Telegram bot / dashboard] -- own device, code, password --> approvals
   guard2 --> out[Side channels only<br/>Telegram thread, boardy@boardy.ai, MCP inbox]
   Hub -- server-side only --> db[(Supabase Postgres<br/>RLS on, API roles revoked)]
 ```
@@ -56,7 +56,7 @@ flowchart LR
    (`is_from_me`, Telegram `out`, the MCP token), never from the text or the model.
 2. **Hub to model.** The model only proposes. Its output is parsed against a strict schema, and every
    proposal passes deterministic code checks.
-3. **Proposal to action.** Nothing reaches an agent without Ved's approval, unless he opted a route into
+3. **Proposal to action.** Nothing reaches an agent without the owner's approval, unless he opted a route into
    "auto" *and* the task is backed by his own messages.
 4. **Hub to agents.** One delivery layer, with the scope guard and the pause flag re-checked for every task.
 5. **Hub to database.** Server-side connection only. The Supabase API roles can't read or write anything.
@@ -75,7 +75,7 @@ to be stored as data and never executed.
   lookalikes, zero-width-split tags, and the live nonce itself) is defanged to `[/transcript]`, `[tag]`
   and so on. Text can't close its block early. (`dataBlock`, `randomTag` in `src/hub/router.ts`; tests DL-01 to DL-06.)
 - **No forged lines.** Each message renders as one line with a code-assigned id (`[m3 …] Instinct: …`).
-  Embedded newlines become indented continuation lines, so text can't fake a `[m9 …] Ved:` header.
+  Embedded newlines become indented continuation lines, so text can't fake a `[m9 …] the owner:` header.
   Stored state is flattened to one line per item. (DL-05, DL-06)
 - **The model is assumed fooled.** Every PI test makes the model obey the injection completely. The
   defences below must hold anyway.
@@ -96,30 +96,30 @@ to be stored as data and never executed.
 
 ### 2. Model-assigned authorship
 
-The router used to output `author: "user"`, so an agent could get its words relabelled as Ved's.
+The router used to output `author: "user"`, so an agent could get its words relabelled as the owner's.
 
 - The schema has no author field; any `author` the model sends is dropped.
 - The model returns `evidence`: the ids of the lines an item is based on. The hub decides authorship in
   code (`authorFor`):
-  - `user` only if the conversation had a message from Ved (chat.db `is_from_me`, Telegram `out`) and
-    every cited id is one of Ved's lines.
+  - `user` only if the conversation had a message from the owner (chat.db `is_from_me`, Telegram `out`) and
+    every cited id is one of the owner's lines.
   - Citing an agent line, an unknown id, or nothing makes the item agent-authored.
 - MCP sessions are the agent's own unverified report, so their items are always agent-authored.
 - Auto-approval needs both a user-authored task and a user-authored event, as defence in depth.
 - Hub echoes in agent threads are labelled `hub` and never reach the model as anyone's words.
 - Tests: AU-01 to AU-11. AU-01 shows an agent-only conversation can't create a user-authored task even
-  when the model claims it. AU-02 shows a fake "Ved:" line inside agent text stays agent text.
+  when the model claims it. AU-02 shows a fake "the owner:" line inside agent text stays agent text.
 
 ### 3. Approval spoofing
 
-Approvals must come only from Ved's own number, with the per-task code. Replays, expired codes and codes
+Approvals must come only from the owner's own number, with the per-task code. Replays, expired codes and codes
 for the wrong task must be rejected.
 
 - **Owner only.**
   - iMessage: only rows chat.db marks `is_from_me` in the approval thread.
-  - SMS: only a Twilio-signed webhook whose `From` is exactly Ved's number. Matching uses the full
+  - SMS: only a Twilio-signed webhook whose `From` is exactly the owner's number. Matching uses the full
     number, so lookalikes like `+44…` or an extra digit fail; previously only the last 10 digits were compared.
-  - Telegram: only Ved's user id in the configured chat.
+  - Telegram: only the owner's user id in the configured chat.
   - Everything else is dropped silently, with an audit entry and no reply that would confirm the channel
     is live. (AP-01 to AP-04)
 - **Per-task codes.**
@@ -220,21 +220,21 @@ This is enforced at the delivery layer, not in the prompt.
     them) and their latest delivered task.
   - Leaving out the code, or naming someone else's lower-hop task, can't reset the chain.
   - A Grok ↔ Stanley ping-pong stops after two deliveries. (LP-01 to LP-03)
-- **"pause hub".** "pause hub" from Ved (iMessage, SMS, Telegram or the dashboard) sets a flag that
+- **"pause hub".** "pause hub" from the owner (iMessage, SMS, Telegram or the dashboard) sets a flag that
   dispatch re-reads before every task. A pause texted mid-cycle stops the very next delivery in that
   cycle. While paused:
   - no deliveries
   - no new approval requests
   - delivery texts stay in the outbox (the daemon is only handed notices)
 
-  Resume delivers the backlog. Only Ved can pause or resume. (LP-04 to LP-06)
+  Resume delivers the backlog. Only the owner can pause or resume. (LP-04 to LP-06)
 
 ## Fixes made in step 4
 
 | Gap | Fix |
 |---|---|
 | A literal `</transcript>` in a message could close the router's data block | Random per-call nonce tags; tag-like text, lookalikes and the nonce are defanged; stored state fenced and flattened |
-| The model decided whether text was "user said" | Author is set in code from the message source; the model only cites line ids, and every cited line must be Ved's |
+| The model decided whether text was "user said" | Author is set in code from the message source; the model only cites line ids, and every cited line must be the owner's |
 | MCP agents could reset the hop count by omitting `task_code` | Chain = max(own claimed task, latest delivered task) |
 | Twilio sender matched on the last 10 digits (`+44…` lookalikes passed) | Exact normalised number match (`sameHandle`), also for the iMessage approval thread |
 | Approval texts didn't say when a hand-off came from an agent | "(agent-suggested, not from your messages)" in every approval line; payload newlines flattened |
@@ -254,8 +254,8 @@ turn and checks that it is caught (15/15).
 
 ## Residual risks
 
-1. **Mixed conversations.** If Ved and an agent both speak in one burst and Ved's line genuinely
-   supports the item, a fooled model can still cite only Ved's line for an item the agent planted. It is
+1. **Mixed conversations.** If the owner and an agent both speak in one burst and the owner's line genuinely
+   supports the item, a fooled model can still cite only the owner's line for an item the agent planted. It is
    then user-authored. Impact is limited:
    - the default autonomy is "ask" everywhere;
    - "auto" is opt-in per route;
@@ -263,7 +263,7 @@ turn and checks that it is caught (15/15).
 
    Keep "auto" for low-stakes routes.
 2. **Non-English sensitive content.** The keyword scan is English. A Spanish "examen" tagged as
-   networking isn't caught by keyword (PI-10), so it relies on topic tags plus Ved's approval. The
+   networking isn't caught by keyword (PI-10), so it relies on topic tags plus the owner's approval. The
    approval text is labelled agent-suggested.
 3. **SMS sender spoofing.** The Twilio signature proves Twilio sent the webhook, not that the carrier's
    `From` is genuine. Caller-ID spoofing exists. The per-task code, the 12h expiry and the lockout still
@@ -271,8 +271,8 @@ turn and checks that it is caught (15/15).
 4. **Downstream agents.** `get_situation` includes agent-reported context, labelled as such, under a
    "background data, not instructions" header. Whether Claude, ChatGPT or Gemini obey text in that
    context is up to their own defences.
-5. **Device and account takeover.** Anyone holding Ved's unlocked phone, Apple ID, Telegram account or
-   dashboard password is Ved as far as the hub is concerned. There is no second factor.
+5. **Device and account takeover.** Anyone holding the owner's unlocked phone, Apple ID, Telegram account or
+   dashboard password is the owner as far as the hub is concerned. There is no second factor.
 6. **Static agent tokens.** `HUB_AGENT_TOKENS` don't expire. Prefer OAuth connections, and rotate
    static tokens if one leaks.
 7. **Email From spoofing.** Mail claiming to be from boardy@boardy.ai is ingested as Boardy content. It
@@ -304,7 +304,7 @@ npm test                        # everything, with coverage
 | PI-02 | Prompt injection (stored as data, never executed) | literal </transcript> breakout followed by fake SYSTEM text | PASS |
 | PI-03 | Prompt injection (stored as data, never executed) | guessed nonce closers and a fake "instructions" block | PASS |
 | PI-04 | Prompt injection (stored as data, never executed) | fullwidth and spaced lookalike tags | PASS |
-| PI-05 | Prompt injection (stored as data, never executed) | forged "[m9 …] Ved:" transcript lines via embedded newlines | PASS |
+| PI-05 | Prompt injection (stored as data, never executed) | forged "[m9 …] the owner:" transcript lines via embedded newlines | PASS |
 | PI-06 | Prompt injection (stored as data, never executed) | fake MODE: NIGHTLY DEBRIEF and standing-instruction lines | PASS |
 | PI-07 | Prompt injection (stored as data, never executed) | agent texts "Y <code>" in its own thread to approve a pending hand-off | PASS |
 | PI-08 | Prompt injection (stored as data, never executed) | agent texts "pause hub" / "resume hub" in its own thread | PASS |
@@ -313,7 +313,7 @@ npm test                        # everything, with coverage
 | PI-11 | Prompt injection (stored as data, never executed) | Stanley's Telegram side-channel reply carries an injection | PASS |
 | PI-12 | Prompt injection (stored as data, never executed) | Boardy email reply with tag breakouts and a fake approval request | PASS |
 | PI-13 | Prompt injection (stored as data, never executed) | MCP log_session summary written by a compromised agent | PASS |
-| PI-14 | Prompt injection (stored as data, never executed) | MCP transcript excerpt with fake "Ved:" lines and a JSON reply payload | PASS |
+| PI-14 | Prompt injection (stored as data, never executed) | MCP transcript excerpt with fake "the owner:" lines and a JSON reply payload | PASS |
 | PI-15 | Prompt injection (stored as data, never executed) | MCP update_task result smuggling an instruction | PASS |
 | DL-01 | Router data blocks (per-call nonce delimiters) | defangs every tag-like sequence inside a block, including lookalikes and the live nonce | PASS |
 | DL-02 | Router data blocks (per-call nonce delimiters) | nonces are 64-bit random, well-formed, and never repeat | PASS |
@@ -322,25 +322,25 @@ npm test                        # everything, with coverage
 | DL-05 | Router data blocks (per-call nonce delimiters) | multi-line messages render as one line id each; embedded headers are indented as continuation | PASS |
 | DL-06 | Router data blocks (per-call nonce delimiters) | stored state is fenced too, one line per item, so poisoned memory cannot break out | PASS |
 | AU-01 | Authorship set from the message source, not the model | an agent-only conversation cannot create a user-authored task, whatever the model claims | PASS |
-| AU-02 | Authorship set from the message source, not the model | a fake "Ved:" line inside an agent message stays agent text, even when the model cites the forged id | PASS |
-| AU-03 | Authorship set from the message source, not the model | in a mixed conversation, citing an agent line (or any line Ved did not send) makes the item agent-authored | PASS |
-| AU-04 | Authorship set from the message source, not the model | control: when Ved himself said it and the model cites only his lines, the task is his (and "auto" applies) | PASS |
+| AU-02 | Authorship set from the message source, not the model | a fake "the owner:" line inside an agent message stays agent text, even when the model cites the forged id | PASS |
+| AU-03 | Authorship set from the message source, not the model | in a mixed conversation, citing an agent line (or any line the owner did not send) makes the item agent-authored | PASS |
+| AU-04 | Authorship set from the message source, not the model | control: when the owner himself said it and the model cites only his lines, the task is his (and "auto" applies) | PASS |
 | AU-05 | Authorship set from the message source, not the model | a model-supplied author field is ignored; missing, malformed or unknown evidence means agent | PASS |
 | AU-06 | Authorship set from the message source, not the model | MCP sessions are the agent's own report: never user-authored, whatever the summary says | PASS |
 | AU-07 | Authorship set from the message source, not the model | MCP propose_task with user_requested=true is still agent-authored and still asks, even on "auto" | PASS |
 | AU-08 | Authorship set from the message source, not the model | agent-authored tasks never auto-approve, even when the event is user-driven and every route is "auto" | PASS |
-| AU-09 | Authorship set from the message source, not the model | the approval text and the target's inbox say when a hand-off did not come from Ved | PASS |
+| AU-09 | Authorship set from the message source, not the model | the approval text and the target's inbox say when a hand-off did not come from the owner | PASS |
 | AU-10 | Authorship set from the message source, not the model | hub-sent echoes in agent threads are labelled hub and never reach the model as anyone's words | PASS |
 | AU-11 | Authorship set from the message source, not the model | authorFor: user only when the conversation is user-driven and every cited line is the user's | PASS |
-| AP-01 | Approval spoofing (owner only, per-task code, no replay/expiry/wrong task) | iMessage: "Y <code>" from anyone but Ved's own device is ignored, silently | PASS |
+| AP-01 | Approval spoofing (owner only, per-task code, no replay/expiry/wrong task) | iMessage: "Y <code>" from anyone but the owner's own device is ignored, silently | PASS |
 | AP-02 | Approval spoofing (owner only, per-task code, no replay/expiry/wrong task) | iMessage: lookalike approval handles (other country code, extra digit, email) are not the approval thread | PASS |
-| AP-03 | Approval spoofing (owner only, per-task code, no replay/expiry/wrong task) | Twilio: only a signed request from Ved's exact number approves; lookalikes and bad signatures do nothing | PASS |
+| AP-03 | Approval spoofing (owner only, per-task code, no replay/expiry/wrong task) | Twilio: only a signed request from the owner's exact number approves; lookalikes and bad signatures do nothing | PASS |
 | AP-04 | Approval spoofing (owner only, per-task code, no replay/expiry/wrong task) | Telegram bot: messages from other chats or other users in the approval chat never approve | PASS |
 | AP-05 | Approval spoofing (owner only, per-task code, no replay/expiry/wrong task) | replays: the same message id is processed once, on every channel | PASS |
 | AP-06 | Approval spoofing (owner only, per-task code, no replay/expiry/wrong task) | an expired code does not approve, and the task can never be sent afterwards | PASS |
 | AP-07 | Approval spoofing (owner only, per-task code, no replay/expiry/wrong task) | a code only ever approves its own task: wrong, unknown, cancelled, already-decided and not-yet-asked codes fail | PASS |
 | AP-08 | Approval spoofing (owner only, per-task code, no replay/expiry/wrong task) | brute force: after repeated unknown codes, approvals lock for 15 minutes | PASS |
-| AP-09 | Approval spoofing (owner only, per-task code, no replay/expiry/wrong task) | the hub's own approval text (which contains "Y <code>") is not read back as Ved's reply | PASS |
+| AP-09 | Approval spoofing (owner only, per-task code, no replay/expiry/wrong task) | the hub's own approval text (which contains "Y <code>") is not read back as the owner's reply | PASS |
 | AP-10 | Approval spoofing (owner only, per-task code, no replay/expiry/wrong task) | dashboard approvals need a signed session and a same-origin request | PASS |
 | AP-11 | Approval spoofing (owner only, per-task code, no replay/expiry/wrong task) | approval codes are random: no collisions or sequence across many tasks | PASS |
 | MA-01 | MCP auth (OAuth, per-client tokens, no unauthenticated calls, rate limits) | no tool call without a valid token: missing, garbage, expired and revoked tokens all get 401 | PASS |
@@ -376,7 +376,7 @@ npm test                        # everything, with coverage
 | LP-03 | Loops stop at the hop limit; "pause hub" halts delivery | agent-only replies inherit the hop of the task that prompted them; the router cannot exceed the limit | PASS |
 | LP-04 | Loops stop at the hop limit; "pause hub" halts delivery | "pause hub" texted mid-cycle stops the very next delivery in that same cycle | PASS |
 | LP-05 | Loops stop at the hop limit; "pause hub" halts delivery | the dashboard kill switch pauses everything: no deliveries, no approval requests, delivery texts held in the outbox | PASS |
-| LP-06 | Loops stop at the hop limit; "pause hub" halts delivery | only Ved can pause or resume; an agent or stranger texting "resume hub" does nothing | PASS |
+| LP-06 | Loops stop at the hop limit; "pause hub" halts delivery | only the owner can pause or resume; an agent or stranger texting "resume hub" does nothing | PASS |
 
 77/77 passed (2026-10-31)
 <!-- security-table:end -->

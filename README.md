@@ -1,18 +1,53 @@
 # Agent Hub
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D22.13-339933)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen)](#contributing)
+[![License: MIT](https://img.shields.io/badge/license-MIT-6b5b4a)](LICENSE)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D22.13-6b5b4a)](https://nodejs.org/)
+[![Tests](https://github.com/Vedthakar/agent-hub/actions/workflows/ci.yml/badge.svg)](.github/workflows/ci.yml)
 
-Make all your AI agents work as one.
+**Make all your AI agents work as one.** Free, open source and self-hosted.
 
-<!-- Replace the line below with: ![Demo](docs/demo.gif) -->
+Most people now use several AI agents, and every one of them starts from zero. You repeat the plan, the constraints and what you already finished, and none of them can hand a piece of work to the one who should do it.
 
-*Demo GIF: add `docs/demo.gif`.*
+Agent Hub sits in between. It keeps one picture of what you're doing, in an Obsidian vault you own, shares it with your agents limited to the topics you allow, and turns a decision in one conversation into a task for another agent after you approve it.
 
-People keep a stack of specialized agents. Instinct, Stanley, and Boardy live in iMessage. Claude, ChatGPT, and Gemini each have their own chat. Grok Bot runs on its own. Every one of them starts from zero. You repeat the plan, the constraints, and what you already finished, and none of them can hand a piece of work to the one who should do it.
+- **Works with what you already pay for.** It works with no API key and no extra bill. An optional background reader uses Claude Code on your existing plan.
+- **Works with agents that have no API,** including ones that only live in iMessage, email or Telegram. That's the part most memory tools don't do.
+- **You own it.** Your memory is plain Markdown on your machine, and you can leave any agent without losing what it knew.
+- **You stay in charge.** Nothing is handed to another agent without your approval unless you set that up, and each agent only sees what you allow.
 
-Agent Hub is the layer in between. It keeps one picture of what you are doing, and it turns a decision in one conversation into a task for another agent after you approve it.
+## Get started
+
+You need [Node.js 22.13 or newer](https://nodejs.org/). Then:
+
+```bash
+git clone https://github.com/Vedthakar/agent-hub.git ~/Code/agent-hub
+cd ~/Code/agent-hub
+./install.sh
+```
+
+It installs everything, starts the hub and opens the setup page. Pick the agents you use, and it walks you through each one. That takes about five minutes for Claude and ChatGPT.
+
+On a Mac, keep it out of Documents and Desktop, since iCloud can move a live database off your disk. On Linux, a server or Windows, use [Docker](#run-with-docker). Everything works there except reading iMessage.
+
+**What you need for each kind of agent:**
+
+| You use | You also need |
+| --- | --- |
+| Claude, ChatGPT, Gemini | A public address, so they can reach your hub. `npm run tunnel` gets a free one |
+| Instinct, Stanley, Boardy (iMessage) | A Mac that stays on, plus Full Disk Access for the helper |
+| Sending to Instinct or Boardy by email | A Gmail app password (or another provider's) |
+| The background reader | Claude Code signed in with your plan (`claude auth login`) |
+
+Any other agent that speaks MCP or webhooks can be added from **Connections → Add agent**.
+
+### Run with Docker
+
+```bash
+docker compose up -d
+docker compose logs hub | grep welcome
+```
+
+Open the link it prints. Your data stays in a Docker volume.
 
 ## What it does
 
@@ -178,19 +213,12 @@ Delivery uses the adapter for that agent: an MCP inbox, email, or Telegram. The 
 
 `/health` without the daemon token returns states only. Error text and counts stay behind `HUB_DAEMON_TOKEN`.
 
-## Quick start
+## More on setup
 
-Node.js 22.13 or newer. A Mac is required for iMessage.
-
-```bash
-npm install
-npm run dev
-```
-
-The hub prints a one-time setup link. Open it (or go to [http://localhost:8787](http://localhost:8787)) and:
+The setup page walks you through this:
 
 1. Create a dashboard password.
-2. Walk through the wizard: how it works, Full Disk Access, keep-awake, your approval number, which agents you use, then each agent's card.
+2. Pick which agents you use. Mac steps only appear if one of them lives in iMessage.
 3. On **Connections**, hook up the rest: copy the MCP URL for Claude / ChatGPT / Gemini, pick Instinct / Stanley / Boardy threads from Messages, generate Grok Bot's webhook.
 
 Secrets you type in the UI are stored encrypted (macOS Keychain on a Mac, Supabase Vault in the cloud, or AES-GCM in the hub database). They are never written to `.env`.
@@ -285,7 +313,8 @@ Reads that arrive on their own (the daemon, MCP) use `NO_PULL_READS`. Polling re
 ## Roadmap
 
 - **Automatic send for agent-suggested hand-offs on a route you trust.** `ask`, `notify`, and `auto` already exist per route. They apply to hand-offs taken from your own messages. A task an agent proposed still waits for a code.
-- **More connectors.**
+- **More connectors.** Gemini history import is the next one.
+- **Hosted option.** Today each person runs their own hub.
 - **A Mac menu-bar app.** Today the daemon is a launchd agent (`com.agenthub.daemon`).
 
 ## Built on
@@ -308,15 +337,7 @@ Agent Hub is not affiliated with Anthropic, OpenAI, Google, the projects above, 
 
 ## Contributing
 
-Issues and pull requests are welcome.
-
-```bash
-npm run test:unit      # unit and golden tests, no extra services
-npm run test:offline   # full suite on embedded PGlite
-npm test               # full suite against local Supabase
-```
-
-`npm test` needs a local Supabase Postgres. Start it with `npm run supabase:start` (Docker), or use `npm run test:offline`. Do not commit `.env`, `smoke.env`, or daemon tokens.
+Issues and pull requests are welcome, especially new agent connectors. See [CONTRIBUTING.md](CONTRIBUTING.md). To report a security problem privately, see [SECURITY.md](SECURITY.md).
 
 ## License
 

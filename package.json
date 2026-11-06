@@ -5,6 +5,10 @@
   "description": "Make all of your AI agents act as one coherent unit: silent context sync + cross-agent triggers.",
   "type": "module",
   "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/Vedthakar/agent-hub.git" },
+  "homepage": "https://github.com/Vedthakar/agent-hub#readme",
+  "bugs": "https://github.com/Vedthakar/agent-hub/issues",
+  "keywords": ["ai-agents", "mcp", "obsidian", "second-brain", "imessage", "self-hosted", "claude", "chatgpt", "gemini"],
   "engines": {
     "node": ">=22.13"
   },

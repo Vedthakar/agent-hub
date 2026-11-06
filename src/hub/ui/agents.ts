@@ -11,16 +11,16 @@ export interface AgentMeta {
 }
 
 export const AGENT_META: Record<BuiltinAgentId, AgentMeta> = {
-  claude: { color: '#d97757', tagline: 'Deep work, writing and coding help', kind: 'mcp', app: 'Claude' },
-  chatgpt: { color: '#10a37f', tagline: 'General assistant', kind: 'mcp', app: 'ChatGPT' },
-  gemini: { color: '#4285f4', tagline: 'Google assistant', kind: 'mcp', app: 'Gemini' },
-  instinct: { color: '#8b5cf6', tagline: 'Chief of staff: debriefs, schedule, reminders', kind: 'imessage' },
-  stanley: { color: '#f59e0b', tagline: 'Content: ideas, scripts, shoots', kind: 'imessage' },
-  boardy: { color: '#0ea5e9', tagline: 'Networking: warm intros', kind: 'imessage' },
-  grok: { color: '#3f3f46', tagline: 'Autonomous operator for work projects', kind: 'webhook' },
+  claude: { color: '#a0755a', tagline: 'Deep work, writing and coding help', kind: 'mcp', app: 'Claude' },
+  chatgpt: { color: '#6f7f68', tagline: 'General assistant', kind: 'mcp', app: 'ChatGPT' },
+  gemini: { color: '#6d7a85', tagline: 'Google assistant', kind: 'mcp', app: 'Gemini' },
+  instinct: { color: '#7d6b78', tagline: 'Chief of staff: debriefs, schedule, reminders', kind: 'imessage' },
+  stanley: { color: '#a68a56', tagline: 'Content: ideas, scripts, shoots', kind: 'imessage' },
+  boardy: { color: '#5f7f80', tagline: 'Networking: warm intros', kind: 'imessage' },
+  grok: { color: '#4f4a44', tagline: 'Autonomous operator for work projects', kind: 'webhook' },
 };
 
-const CUSTOM_COLORS = ['#64748b', '#db2777', '#0d9488', '#7c3aed', '#ea580c', '#2563eb'];
+const CUSTOM_COLORS = ['#7a7264', '#8f6f63', '#66786c', '#7b7083', '#94785a', '#62747d'];
 
 export function metaFor(agent: AgentId): AgentMeta {
   if (agent in AGENT_META) return AGENT_META[agent as BuiltinAgentId];

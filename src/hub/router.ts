@@ -132,7 +132,7 @@ const oneLine = (s: string) => s.replace(/[\r\n\u2028\u2029]+/g, ' ⏎ ');
 function renderLines(lines: TranscriptLine[], ownerName: string, agentName: string, maxChars = 12_000): string {
   const rendered = lines.map((l) => {
     const [first, ...rest] = l.text.split(/\r?\n|\u2028|\u2029/);
-    // Continuation lines are indented, so text can't fake a new "[m9 …] Ved:" header.
+    // Continuation lines are indented, so text can't fake a new "[m9 …] Name:" header.
     return [`[${l.id} ${l.at.toISOString()}] ${l.author === 'user' ? ownerName : agentName}: ${first}`, ...rest.map((r) => `    | ${r}`)].join('\n');
   });
   let out = rendered.join('\n');

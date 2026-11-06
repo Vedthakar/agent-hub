@@ -21,7 +21,7 @@ export function brainUrl(hub: Hub): string | null {
 }
 
 const page = (title: string, body: string) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>${h(title)}</title>
-<style>body{font:16px/1.5 system-ui,sans-serif;max-width:760px;margin:24px auto;padding:0 16px;color:#111;background:#fff}h1{font-size:24px}h2{font-size:18px;margin-top:28px}li{margin:6px 0}pre{white-space:pre-wrap;word-break:break-word}.m{color:#555;font-size:14px}input{font:inherit;padding:8px;width:70%}button{font:inherit;padding:8px 14px}</style></head><body>${body}</body></html>`;
+<style>body{font:16px/1.55 -apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',sans-serif;max-width:760px;margin:0 auto;padding:72px 24px 120px;color:#1d1a16;background:#f4efe7;-webkit-font-smoothing:antialiased}a{color:inherit;text-underline-offset:3px}h1{font-size:44px;line-height:1;letter-spacing:-.04em;font-weight:700;margin:0 0 20px}h2{font-size:13px;font-weight:500;letter-spacing:.05em;text-transform:uppercase;color:#7a7165;margin:56px 0 20px}ul{list-style:none;padding:0}li{margin:0 0 16px}pre{white-space:pre-wrap;word-break:break-word;font:inherit}.m{color:#7a7165;font-size:13px}form{margin:32px 0}input{font:inherit;padding:14px 20px;width:70%;border:0;border-radius:999px;background:#fbf8f3}button{font:inherit;padding:14px 26px;border:0;border-radius:999px;background:#1d1a16;color:#fbf8f3;cursor:pointer}</style></head><body>${body}</body></html>`;
 
 export function brainRouter(hub: Hub): Router {
   const { store, cfg } = hub;
