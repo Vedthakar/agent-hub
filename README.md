@@ -130,6 +130,14 @@ A hand-off you type is your approval, so it goes straight out, except over SMS, 
 - **Using them:** agents find old chats with `search_history` and `read_old_chat`, limited by the same topic rules. Imported chats never become tasks or current state, and they stay out of `get_situation`, so they don't slow down new chats.
 - **Quick start:** a prompt you can paste into Claude or ChatGPT saves your main goals and preferences right away, using that app's own search. It won't find everything.
 
+**Instinct and your vault.** Instinct can't connect to MCP, but it runs on its own computer with a browser and a mailbox, so it reaches your vault three ways. All are in **Connections → Instinct**, limited to the topics it may see:
+
+- **A private page.** Create a link and text it to Instinct once. It gets a read-only page with what's current, your goals, recent activity, your Library and search. The address is the password, so a new link kills the old one, and each read is logged.
+- **Regular emails.** An update goes to its mailbox at `INSTINCT_DIGEST_TIMES` (08:00 and 21:00 by default) and when you start a debrief.
+- **Email back.** Instinct emails your address with the subject `vault: your search` for matching notes or `remember: something` to save one. Anything else it sends is shared with your other agents. Mail can fake its sender, so none of this can approve anything, and answers only go to Instinct's own mailbox.
+
+**Where to keep it.** Keep the project outside iCloud-synced folders like Documents and Desktop. iCloud can move a live database off your disk, which stalls the hub. `npm run hub:install` runs the hub in the background so it survives restarts.
+
 **Vault.** Open the vault folder (`VAULT_PATH`, default `.data/vault`, also in Settings) in Obsidian. `Memory/` holds one note per goal, preference, fact, and situation item. Edit a note and agents see the new text; delete it and it's retired. Drop a note in `Inbox/` and the hub files it. `Library/` holds imported chats, `Log/` has a line for each thing an agent did, and `Tasks.md` is a read-only view. Tasks, approvals, and permissions stay in the database, so editing a file can never approve anything. Agents reach memory only through the hub's tools, so their topic limits still apply.
 
 **Situation.** This is short-lived state: what you are doing now, a plan, a temporary pause. Each item expires. If the model leaves the expiry off, the hub keeps it for 24 hours. A slot name (`now:activity`, `plan:2026-11-02`, `pause:open_source`) means a newer item replaces the older one. Tomorrow's plan can stay hidden until morning via `valid_from`. Goals and preferences are separate, and they stay until a later conversation retires them. You can clear a situation item on the dashboard.

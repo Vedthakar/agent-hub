@@ -85,6 +85,8 @@ export interface HubConfig {
     importRunsPerDay: number;
     bin: string | null;
   };
+  /** Local times the hub emails Instinct an update, like 08:00. Empty means only on a debrief. */
+  instinctDigestTimes: string[];
   /** The Obsidian vault the hub keeps its memory notes in. */
   vaultPath: string;
   router: {
@@ -179,6 +181,7 @@ export function loadConfig(env = process.env): HubConfig {
       importRunsPerDay: int(env, 'IMPORT_MAX_RUNS_PER_DAY', 30),
       bin: env.WORKER_CLAUDE_BIN ?? null,
     },
+    instinctDigestTimes: (env.INSTINCT_DIGEST_TIMES ?? '08:00,21:00').split(',').map((t) => t.trim()).filter((t) => /^([01]\d|2[0-3]):[0-5]\d$/.test(t)),
     vaultPath: env.VAULT_PATH ?? path.resolve(path.dirname(env.PGLITE_DIR ?? '.data/pglite'), 'vault'),
     router: {
       debounceMs: int(env, 'ROUTER_DEBOUNCE_MS', 10 * 60_000),

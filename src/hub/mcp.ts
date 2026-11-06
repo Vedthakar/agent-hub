@@ -33,7 +33,7 @@ export function createMcpServer(hub: Hub, agent: AgentId): McpServer {
     async () => {
       const view = await situationFor(store, agent);
       await store.touchRead(agent);
-      return { ...text(renderSituation(view, cfg.ownerName, cfg.timezone)), structuredContent: view as unknown as Record<string, unknown> };
+      return { ...text(`${renderSituation(view, cfg.ownerName, cfg.timezone)}\n\nKEEP THIS CURRENT: as you chat, call set_situation or save_memory whenever ${cfg.ownerName} states a plan, focus, goal or preference, and log_session at natural stopping points. Other agents only know what gets saved. Use search_history when they mention earlier work.`), structuredContent: view as unknown as Record<string, unknown> };
     },
   );
 

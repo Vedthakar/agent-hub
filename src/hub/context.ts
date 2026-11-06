@@ -2,7 +2,7 @@ import type { AgentId } from '../shared/types.js';
 import { ADAPTERS } from './adapters/index.js';
 import { sensitiveTopicsIn } from './guard.js';
 import { canSee, deniedTopics, type Scope } from './scopes.js';
-import type { Store, SituationRow, FactRow, EventRow, TaskRow } from './store.js';
+import type { ArchiveRow, Store, SituationRow, FactRow, EventRow, TaskRow } from './store.js';
 import { formatLocal, startOfLocalDay } from './tz.js';
 
 const AUTHOR_LABEL = { user: 'you said', agent: 'agent-reported', hub: 'hub' } as const;
@@ -95,8 +95,13 @@ export async function compactContextFor(store: Store, agent: AgentId, limit = 5)
   return live.filter((s) => visible(scope, s.topics, s.text)).slice(0, limit).map((s) => s.text);
 }
 
+/** Can this agent see an imported chat? Its folder topics decide, and its words are scanned too. */
+export function oldChatVisible(scope: Scope | undefined, row: Pick<ArchiveRow, 'title' | 'summary' | 'topics'> & { messages?: ArchiveRow['messages'] }): boolean {
+  return visible(scope, row.topics, `${row.title} ${row.summary ?? ''} ${(row.messages ?? []).map((m) => m.text).join(' ')}`);
+}
+
 /** The nightly digest emailed to Instinct when a debrief starts. */
-export async function buildDebriefDigest(store: Store, opts: { ownerName: string; tz: string; now?: Date }): Promise<{ subject: string; body: string }> {
+export async function buildDebriefDigest(store: Store, opts: { ownerName: string; tz: string; now?: Date; scheduled?: boolean; brainUrl?: string | null; replyTo?: string | null }): Promise<{ subject: string; body: string }> {
   const now = opts.now ?? new Date();
   const since = startOfLocalDay(now, opts.tz);
   const scope = await store.scope('instinct');
@@ -111,7 +116,7 @@ export async function buildDebriefDigest(store: Store, opts: { ownerName: string
   const name = (a: AgentId) => ADAPTERS[a]?.name ?? a;
   const t = (d: Date) => formatLocal(new Date(d), opts.tz, { withDay: false });
   const lines = [
-    `Context for tonight's debrief with ${opts.ownerName}: what ${opts.ownerName}'s other agents saw today.`,
+    opts.scheduled ? `A regular update about ${opts.ownerName}: what ${opts.ownerName}'s other agents saw today.` : `Context for tonight's debrief with ${opts.ownerName}: what ${opts.ownerName}'s other agents saw today.`,
     'No reply needed. This is background for the conversation you are about to have.',
     '',
     'TODAY ACROSS AGENTS',
@@ -133,5 +138,7 @@ export async function buildDebriefDigest(store: Store, opts: { ownerName: string
     lines.push('', 'RECENT NOTES FROM THE VAULT');
     for (const n of notes) lines.push(`- ${n.title}${n.summary ? `: ${n.summary}` : ''}`);
   }
-  return { subject: `${opts.ownerName}'s day so far (for tonight's debrief)`, body: lines.join('\n') };
+  if (opts.brainUrl) lines.push('', 'SEARCH EVERYTHING', `${opts.ownerName}'s full second brain is at this private link. Don't share it: ${opts.brainUrl}`);
+  if (opts.replyTo) lines.push('', 'ASK OR ADD BY EMAIL', `Email ${opts.replyTo} with the subject "vault: your search" for matching notes, or "remember: something to save". Anything else you send there is shared with ${opts.ownerName}'s other agents.`);
+  return { subject: opts.scheduled ? `${opts.ownerName}'s update` : `${opts.ownerName}'s day so far (for tonight's debrief)`, body: lines.join('\n') };
 }

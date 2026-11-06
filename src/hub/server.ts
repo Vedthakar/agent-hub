@@ -19,6 +19,7 @@ import { inbox, logSession, propose, retireMemory, saveMemory, setSituation, upd
 import { renderSituation, situationFor } from './context.js';
 import type { HubConfig } from './config.js';
 import { TOPICS, type AgentId, type DaemonMessage } from '../shared/types.js';
+import { brainRouter } from './brain.js';
 import type { DaemonJobRow } from './store.js';
 
 export interface DaemonHeartbeat {
@@ -428,6 +429,9 @@ export function createApp(hub: Hub): express.Express {
         return;
     }
   });
+
+  // ---------- private read-only page for agents that can browse but can't use MCP ----------
+  app.use('/brain', brainRouter(hub));
 
   // ---------- dashboard ----------
   app.use(dashboardRouter(hub));

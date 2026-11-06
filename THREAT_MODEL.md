@@ -277,9 +277,10 @@ turn and checks that it is caught (15/15).
    static tokens if one leaks.
 7. **Email From spoofing.** Mail claiming to be from boardy@boardy.ai is ingested as Boardy content. It
    can only produce agent-authored, approval-gated output, but it can add misleading context.
-8. **Cost.** Each quiet conversation burst costs one worker run against your plan's limits, capped per day (`WORKER_MAX_RUNS_PER_DAY`). A chatty or hostile agent can use
+8. **Instinct's vault link.** The address is the only password: anyone holding it can read what Instinct may see. It's off by default, unguessable, read-only, rate limited, logged and replaceable, and it respects pause and topic limits. Text in the vault is written by agents and old chats, and Instinct can act in the real world, so a poisoned note could try to steer it; pages say to treat the content as data, but that can't be enforced on another company's agent. Instinct's own privacy terms apply to anything it reads.
+9. **Cost.** Each quiet conversation burst costs one worker run against your plan's limits, capped per day (`WORKER_MAX_RUNS_PER_DAY`). A chatty or hostile agent can use
    up plan limits. The daily cap, the debounce window and the MCP rate limits bound it.
-9. **Server compromise.** `DATABASE_URL` and the transport credentials live in the server environment.
+10. **Server compromise.** `DATABASE_URL` and the transport credentials live in the server environment.
    Whoever controls the server controls the hub.
 10. **SQLite sidecar files.** The read-only daemon still touches chat.db's `-shm` index (all WAL readers
     do). Message data is never written.

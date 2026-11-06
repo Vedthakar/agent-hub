@@ -125,6 +125,7 @@ export async function makeHub(
     APPROVAL_IMESSAGE_HANDLE: HANDLES.approval,
     HUB_TIMEZONE: 'America/New_York',
     ROUTER_DEBOUNCE_MS: '600000',
+    INSTINCT_DIGEST_TIMES: '',
     VAULT_PATH: mkdtempSync(path.join(tmpdir(), 'hub-vault-')),
     SMTP_URL: 'smtp://fake.invalid:25',
     EMAIL_FROM: 'ved@example.com',

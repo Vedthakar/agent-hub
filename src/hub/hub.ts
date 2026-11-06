@@ -4,7 +4,9 @@ import { ADAPTERS } from './adapters/index.js';
 import type { AdapterContext } from './adapters/types.js';
 import { Approvals, type CommandOutcome, type InboundCommand } from './approvals.js';
 import type { HubConfig } from './config.js';
-import { debriefActive, noteDebriefStart, processPendingDebrief, queueDigestNow } from './debrief.js';
+import { brainUrl } from './brain.js';
+import { debriefActive, noteDebriefStart, processPendingDebrief, queueDigestNow, scheduleDigest } from './debrief.js';
+import { readInstinctMail } from './instinctMail.js';
 import { dispatchApproved } from './dispatch.js';
 import { backoffMs } from './backoff.js';
 import { Importer } from './importer.js';
@@ -311,6 +313,13 @@ export class Hub {
         await this.store.audit('hub', 'adapter.read_failed', { agent: a.id, error: String(err) });
       }
     }
+    if (scopes.get('instinct')?.enabled !== false) {
+      try {
+        read += await readInstinctMail(this.ctx, brainUrl(this));
+      } catch (err) {
+        await this.store.audit('hub', 'instinct.mail_failed', { error: String(err).slice(0, 200) });
+      }
+    }
     if (this.cfg.approval.channel === 'telegram' && this.transports.telegramBot) {
       try {
         const owner = String(this.cfg.approval.telegramUserId ?? this.cfg.approval.telegramChatId);
@@ -339,7 +348,8 @@ export class Hub {
             report.read = await this.pollReads();
             report.events = await this.collectBursts();
             report.routed = await this.routePending();
-            report.digest = await processPendingDebrief(this.ctx, () => this.routePending());
+            await scheduleDigest(this.ctx);
+            report.digest = await processPendingDebrief(this.ctx, () => this.routePending(), brainUrl(this));
             report.expired = await this.approvals.sweepExpired();
             report.asked = await this.requestApprovals();
             report.sent = await this.dispatchApproved();

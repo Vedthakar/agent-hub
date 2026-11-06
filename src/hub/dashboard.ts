@@ -430,6 +430,16 @@ export function dashboardRouter(hub: Hub): Router {
     await conn.removeCustomAgent(agent as CustomAgentId);
     go(res, '/connections', { ok: 'deleted' });
   });
+  r.post('/connections/instinct/brain/generate', requireOwner, async (req, res) => {
+    const result = await save({ 'instinct.brainToken': randomBytes(32).toString('base64url') });
+    await store.audit('owner', 'brain.link_created', {});
+    go(res, backTo(req, '/connections/instinct'), result === 'ok' ? { ok: 'saved' } : { err: result });
+  });
+  r.post('/connections/instinct/brain/off', requireOwner, async (req, res) => {
+    const result = await save({ 'instinct.brainToken': null });
+    await store.audit('owner', 'brain.link_removed', {});
+    go(res, backTo(req, '/connections/instinct'), result === 'ok' ? { ok: 'saved' } : { err: result });
+  });
   r.post('/connections/:agent/generate', requireOwner, async (req, res) => {
     const agent = req.params.agent as AgentId;
     if (agent !== 'grok' && !agent.startsWith('custom-')) return res.status(404).end();

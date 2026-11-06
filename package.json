@@ -28,6 +28,7 @@
     "supabase:start": "supabase start -x studio,imgproxy,mailpit,storage-api,realtime,edge-runtime,logflare,vector,supavisor,postgres-meta,gotrue",
     "smoke": "tsx scripts/smoke.ts",
     "tunnel": "bash scripts/tunnel.sh",
+    "hub:install": "bash scripts/install-hub.sh",
     "telegram:login": "tsx scripts/telegram-login.ts"
   },
   "dependencies": {

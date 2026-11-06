@@ -57,6 +57,8 @@ const FIELDS: Record<string, Field> = {
   'email.smtp': field('SMTP_URL', (c, v) => (c.email.smtpUrl = v), true),
   'email.imap': field('IMAP_URL', (c, v) => (c.imap.url = v), true),
   'instinct.email': field('INSTINCT_EMAIL', (c, v) => (c.instinctEmail = v)),
+  'instinct.brainToken': field(null, () => undefined, true),
+  'instinct.digestTimes': field('INSTINCT_DIGEST_TIMES', (c, v) => (c.instinctDigestTimes = v.split(',').map((t) => t.trim()).filter((t) => /^([01]\d|2[0-3]):[0-5]\d$/.test(t)))),
   'boardy.email': field('BOARDY_EMAIL', (c, v) => (c.boardyEmail = v)),
   'profile.fullName': field('OWNER_FULL_NAME', (c, v) => (c.owner.fullName = v)),
   'profile.bio': field('OWNER_BIO', (c, v) => (c.owner.bio = v)),
@@ -222,6 +224,7 @@ export class Connections {
     Object.assign(c.approval, { channel: b.approval.channel, imessageHandle: b.approval.imessageHandle });
     Object.assign(c.worker, b.worker);
     c.vaultPath = b.vaultPath;
+    c.instinctDigestTimes = b.instinctDigestTimes;
     Object.assign(c.email, b.email);
     Object.assign(c.imap, b.imap);
 

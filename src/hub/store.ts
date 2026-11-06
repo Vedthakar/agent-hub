@@ -841,8 +841,8 @@ export class Store {
   }
 
   /** Just what index notes need, so they don't load every message. */
-  archiveIndex(): Promise<Pick<ArchiveRow, 'id' | 'title' | 'folder' | 'summary' | 'vault_path'>[]> {
-    return this.db.query('SELECT id, title, folder, summary, vault_path FROM archive ORDER BY started_at DESC NULLS LAST, id DESC');
+  archiveIndex(): Promise<Pick<ArchiveRow, 'id' | 'title' | 'folder' | 'summary' | 'vault_path' | 'topics'>[]> {
+    return this.db.query('SELECT id, title, folder, summary, vault_path, topics FROM archive ORDER BY started_at DESC NULLS LAST, id DESC');
   }
 
   async bumpArchiveAttempts(ids: number[]): Promise<void> {
